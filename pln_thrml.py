@@ -10,6 +10,16 @@ Propositions  →  CategoricalNode (2 states: 0=False, 1=True)
 Implications  →  CategoricalEBMFactor (weights = log CPT)
 Inference     →  Gibbs sampling recovers P(target|evidence)
 
+Q_tv quantale note:
+    The binary (2-state) builders in this module implement the Q_tv ⊗
+    (energy addition = combination) and ⊕ (Gibbs marginalization) operations,
+    but only recover **strength** from samples.  Confidence must be computed
+    analytically using the truth functions below.
+
+    For complete Q_tv quantale operations that recover **both** strength and
+    confidence from the posterior, use ``pln_thrml_beta.py`` which discretizes
+    each proposition as a K-bin Beta distribution.
+
 Production PLN truth-value formulas (trueagi-io/PLN lib_pln.metta) are
 included at the bottom of this file: STV dataclass, c2w/w2c, confidence
 formulas for all rules, and consistency conditions.
@@ -18,7 +28,6 @@ formulas for all rules, and consistency conditions.
 from dataclasses import dataclass
 import jax
 import jax.numpy as jnp
-import numpy as np
 
 from thrml.block_management import Block
 from thrml.block_sampling import BlockGibbsSpec, sample_states, SamplingSchedule
@@ -75,6 +84,13 @@ def make_confidence_prior(node, strength, confidence):
 
     At confidence=1.0: full-strength prior.
     At confidence→0:  flat prior (maximum entropy).
+
+    .. deprecated::
+        This uses linear confidence scaling (W = c·log P), which treats
+        confidence as a temperature parameter.  This only recovers strength
+        from samples — confidence cannot be recovered.  For complete Q_tv
+        quantale operations (recovering both strength and confidence), use
+        ``pln_thrml_beta.make_beta_prior_factor`` instead.
     """
     w = jnp.array([[confidence * _safe_log(1.0 - strength),
                      confidence * _safe_log(strength)]])
@@ -86,6 +102,11 @@ def make_confidence_implication(parent, child, strength, background, confidence)
 
     At confidence=1.0: full coupling.
     At confidence→0:  no coupling (child ignores parent).
+
+    .. deprecated::
+        This uses linear confidence scaling, which only recovers strength.
+        For complete Q_tv quantale operations, use
+        ``pln_thrml_beta.make_beta_implication_factor`` instead.
     """
     w = jnp.array([
         [[confidence * _safe_log(1.0 - background),
@@ -280,6 +301,113 @@ def build_symmetric_chain(priors, strengths, backgrounds):
                 spec=spec, program=prog, n=n)
 
 
+def build_full_graph(priors, implications, similarities=None,
+                     equivalences=None, backgrounds=None,
+                     use_confidence=True):
+    """Compile an entire knowledge base into one factor graph.
+
+    Unlike the per-rule builders (build_chain, build_v_graph, ...),
+    this function accepts *all* knowledge at once and produces a single
+    factor graph.  One round of Gibbs sampling then yields samples from
+    the full joint distribution, so every marginal P(X) and conditional
+    P(Y|X) can be read out without re-compiling.
+
+    Uses single-node-per-block strategy (cf. thrml-tv) so that
+    arbitrary graph topologies are supported without graph coloring.
+
+    Parameters
+    ----------
+    priors : dict[str, {"strength": float, "confidence": float}]
+        Node priors, e.g. from extract_priors().
+    implications : list[{"src", "dst", "strength", "confidence"}]
+        Directed links (Implication / Inheritance).
+    similarities : list[{"src", "dst", "strength", "confidence"}] | None
+        Symmetric links (Similarity).  Compiled as bidirectional coupling.
+    equivalences : list[{"src", "dst", "strength", "confidence"}] | None
+        Symmetric links (Equivalence).  Compiled as bidirectional coupling.
+    backgrounds : dict[(str, str), float] | None
+        Per-edge background rates.  Missing edges default to DEFAULT_EPSILON.
+    use_confidence : bool
+        If True (default), scale factor weights by confidence so that
+        low-confidence links contribute less energy.
+
+    Returns
+    -------
+    dict with keys: nodes (name→CategoricalNode), factors, free_blocks,
+                    spec, program
+    """
+    similarities = similarities or []
+    equivalences = equivalences or []
+    backgrounds = backgrounds or {}
+
+    # ── collect all node names ───────────────────────────────────────
+    names: set[str] = set(priors.keys())
+    for link in implications:
+        names.add(link["src"])
+        names.add(link["dst"])
+    for link in similarities + equivalences:
+        names.add(link["src"])
+        names.add(link["dst"])
+
+    name_to_node = {name: CategoricalNode() for name in sorted(names)}
+
+    # ── build factors ────────────────────────────────────────────────
+    factors = []
+
+    # Priors (every node gets one; unknown nodes get flat prior)
+    for name, node in name_to_node.items():
+        p = priors.get(name)
+        s = p["strength"] if p else 0.5
+        c = p["confidence"] if p else 0.0
+        if use_confidence:
+            factors.append(make_confidence_prior(node, s, c))
+        else:
+            factors.append(make_prior_factor(node, s))
+
+    # Directed links (Implication / Inheritance)
+    for link in implications:
+        parent = name_to_node[link["src"]]
+        child = name_to_node[link["dst"]]
+        bg = backgrounds.get((link["src"], link["dst"]), DEFAULT_EPSILON)
+        if use_confidence:
+            factors.append(make_confidence_implication(
+                parent, child, link["strength"], bg, link["confidence"]))
+        else:
+            factors.append(make_implication_factor(
+                parent, child, link["strength"], bg))
+
+    # Symmetric links (Similarity / Equivalence) → bidirectional coupling
+    for link in similarities + equivalences:
+        a = name_to_node[link["src"]]
+        b = name_to_node[link["dst"]]
+        bg = backgrounds.get((link["src"], link["dst"]), DEFAULT_EPSILON)
+        if use_confidence:
+            factors.append(make_confidence_implication(
+                a, b, link["strength"], bg, link["confidence"]))
+            factors.append(make_confidence_implication(
+                b, a, link["strength"], bg, link["confidence"]))
+        else:
+            factors.append(make_implication_factor(
+                a, b, link["strength"], bg))
+            factors.append(make_implication_factor(
+                b, a, link["strength"], bg))
+
+    # ── single-node-per-block (works for any topology) ───────────────
+    node_list = list(name_to_node.values())
+    free_blocks = [Block([node]) for node in node_list]
+    spec = BlockGibbsSpec(free_blocks, [])
+    samplers = [CategoricalGibbsConditional(N_CATS) for _ in free_blocks]
+
+    prog = FactorSamplingProgram(
+        gibbs_spec=spec,
+        samplers=samplers,
+        factors=factors,
+        other_interaction_groups=[],
+    )
+    return dict(nodes=name_to_node, factors=factors, free_blocks=free_blocks,
+                spec=spec, program=prog)
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 #  Sampling
 # ═══════════════════════════════════════════════════════════════════════════
@@ -359,162 +487,6 @@ def estimate_conditional(samples, graph, target, condition, cond_val=1):
     return float(jnp.sum(t_flat * mask) / count)
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-#  PLN analytical formulas  (pure Python, no JAX)
-# ═══════════════════════════════════════════════════════════════════════════
-
-def pln_modus_ponens_strength(s_A, s_AB, epsilon=DEFAULT_EPSILON):
-    """P(B=1) = s_A * s_AB + epsilon * (1 - s_A)"""
-    return s_A * s_AB + epsilon * (1.0 - s_A)
-
-
-def pln_deduction_strength(s_AB, s_BC, s_C0):
-    """P(C=1|A=1) = s_AB * s_BC + (1 - s_AB) * s_C0
-
-    Equivalent to full PLN:  s_AB*s_BC + (1-s_AB)*(s_C - s_B*s_BC)/(1-s_B)
-    since (s_C - s_B*s_BC)/(1-s_B) = s_C0 by total probability.
-    """
-    return s_AB * s_BC + (1.0 - s_AB) * s_C0
-
-
-def pln_inversion_strength(s_AB, s_A, s_B0):
-    """P(A=1|B=1) via Bayes' rule.
-
-    P(B) = s_A*s_AB + (1-s_A)*s_B0
-    P(A|B) = s_AB * s_A / P(B)
-    """
-    p_B = s_A * s_AB + (1.0 - s_A) * s_B0
-    if p_B < 1e-12:
-        return 0.0
-    return s_AB * s_A / p_B
-
-
-def bayesnet_conditional_v(root_prior, left_s, right_s, left_bg, right_bg):
-    """Exact P(Right=1|Left=1) for V-shape  Left ← Root → Right.
-
-    P(Right=1|Left=1) = Σ_r P(Right=1|Root=r) * P(Root=r|Left=1)
-
-    where P(Root=r|Left=1) comes from Bayes on Root→Left.
-    """
-    # P(Left=1|Root=r)
-    p_L_given_R1 = left_s
-    p_L_given_R0 = left_bg
-
-    # P(Left=1) = P(L|R=1)*P(R=1) + P(L|R=0)*P(R=0)
-    p_L = p_L_given_R1 * root_prior + p_L_given_R0 * (1.0 - root_prior)
-
-    if p_L < 1e-12:
-        return 0.0
-
-    # P(Root=1|Left=1) via Bayes
-    p_R1_given_L1 = p_L_given_R1 * root_prior / p_L
-
-    # P(Right=1|Left=1) = P(Ri=1|Ro=1)*P(Ro=1|L=1) + P(Ri=1|Ro=0)*P(Ro=0|L=1)
-    return right_s * p_R1_given_L1 + right_bg * (1.0 - p_R1_given_L1)
-
-
-def bayesnet_conditional_inv_v(left_prior, right_prior,
-                               left_s, right_s,
-                               left_bg, right_bg):
-    """Exact P(Right=1|Left=1) for inverted-V  Left → Center ← Right.
-
-    Uses full joint enumeration over (Left, Center, Right).
-    """
-    total_with_L1 = 0.0
-    target_with_L1 = 0.0
-
-    for l in (0, 1):
-        for c in (0, 1):
-            for r in (0, 1):
-                # P(Left=l)
-                p_l = left_prior if l == 1 else (1.0 - left_prior)
-                # P(Right=r)
-                p_r = right_prior if r == 1 else (1.0 - right_prior)
-                # P(Center=c | Left=l)
-                if l == 1:
-                    p_c_l = left_s if c == 1 else (1.0 - left_s)
-                else:
-                    p_c_l = left_bg if c == 1 else (1.0 - left_bg)
-                # P(Center=c | Right=r)
-                if r == 1:
-                    p_c_r = right_s if c == 1 else (1.0 - right_s)
-                else:
-                    p_c_r = right_bg if c == 1 else (1.0 - right_bg)
-
-                # Joint under factored model:
-                # P(L,C,R) ∝ P(L) * P(R) * P(C|L) * P(C|R)
-                joint = p_l * p_r * p_c_l * p_c_r
-
-                if l == 1:
-                    total_with_L1 += joint
-                    if r == 1:
-                        target_with_L1 += joint
-
-    if total_with_L1 < 1e-12:
-        return 0.0
-    return target_with_L1 / total_with_L1
-
-
-def inv_v_marginal(left_prior, right_prior,
-                   left_s, right_s,
-                   left_bg, right_bg, target="left"):
-    """Exact marginal P(target=1) under the factored inverted-V model.
-
-    The factored model P(L,C,R) ∝ P(L)*P(R)*P(C|L)*P(C|R) shifts
-    marginals from the priors because both parents couple through C.
-    """
-    total = 0.0
-    target_sum = 0.0
-
-    for l in (0, 1):
-        for c in (0, 1):
-            for r in (0, 1):
-                p_l = left_prior if l == 1 else (1.0 - left_prior)
-                p_r = right_prior if r == 1 else (1.0 - right_prior)
-                p_c_l = (left_s if c == 1 else (1.0 - left_s)) if l == 1 \
-                    else (left_bg if c == 1 else (1.0 - left_bg))
-                p_c_r = (right_s if c == 1 else (1.0 - right_s)) if r == 1 \
-                    else (right_bg if c == 1 else (1.0 - right_bg))
-                joint = p_l * p_r * p_c_l * p_c_r
-                total += joint
-                t_val = l if target == "left" else r
-                if t_val == 1:
-                    target_sum += joint
-
-    return target_sum / total if total > 1e-12 else 0.0
-
-
-def chain_conditional(n, strengths, backgrounds):
-    """Exact P(X_{n-1}=1 | X_0=1) for a chain via iterative matrix multiply.
-
-    Transition matrix T[parent, child]:
-        T[0,:] = [1-bg, bg]
-        T[1,:] = [1-s,  s ]
-    """
-    # Start with P(X_0=0|X_0=1) = 0,  P(X_0=1|X_0=1) = 1
-    state = np.array([0.0, 1.0])  # [P(X=0|evidence), P(X=1|evidence)]
-
-    for i in range(n - 1):
-        s, bg = strengths[i], backgrounds[i]
-        T = np.array([[1.0 - bg, bg],
-                       [1.0 - s,  s]])
-        state = state @ T
-
-    return state[1]  # P(X_{n-1}=1 | X_0=1)
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-#  Reporting
-# ═══════════════════════════════════════════════════════════════════════════
-
-def compare(name, analytical, sampled, tol=0.02):
-    """Print one comparison line, return whether it passed."""
-    err = abs(sampled - analytical)
-    passed = err < tol
-    mark = "PASS" if passed else "FAIL"
-    print(f"  {name:<32s}  analytical={analytical:.4f}  "
-          f"gibbs={sampled:.4f}  err={err:.4f}  [{mark}]")
-    return passed
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -523,13 +495,16 @@ def compare(name, analytical, sampled, tol=0.02):
 
 @dataclass
 class STV:
-    """Simple Truth Value: (strength, confidence).
+    """Simple Truth Value: (strength, confidence, evidence).
 
     strength:   first-order probability estimate
     confidence: certainty of the estimate, encodes evidence weight
+    evidence:   set of evidence IDs (for stamp-based revision)
+                upstream: StampDisjoint / StampConcat in lib_pln.metta
     """
     strength: float
     confidence: float = 1.0
+    evidence: frozenset = None
 
     def __repr__(self):
         return f"(stv {self.strength:.6f} {self.confidence:.6f})"
@@ -609,7 +584,7 @@ def truth_deduction(stv_A, stv_B, stv_C, stv_AB, stv_BC):
         s = sAB * sBC + (1.0 - sAB) * (sC - sB * sBC) / (1.0 - sB)
 
     c = sAB * sBC * cAB * cBC
-    return STV(s, c)
+    return STV(s, c, evidence=stamp_concat(stv_AB.evidence, stv_BC.evidence))
 
 
 def truth_modus_ponens(stv_A, stv_AB):
@@ -625,7 +600,7 @@ def truth_modus_ponens(stv_A, stv_AB):
 
     s = sA * sAB + 0.02 * (1.0 - sA)
     c = sA * sAB * cA * cAB
-    return STV(s, c)
+    return STV(s, c, evidence=stamp_concat(stv_A.evidence, stv_AB.evidence))
 
 
 def truth_inversion(stv_B, stv_AB):
@@ -641,7 +616,7 @@ def truth_inversion(stv_B, stv_AB):
     """
     s = stv_AB.strength
     c = stv_B.confidence * stv_AB.confidence * 0.6
-    return STV(s, c)
+    return STV(s, c, evidence=stv_AB.evidence)
 
 
 def truth_induction(stv_A, stv_B, stv_C, stv_CA, stv_CB):
@@ -663,7 +638,7 @@ def truth_induction(stv_A, stv_B, stv_C, stv_CA, stv_CB):
     s = term1 + term2
 
     c = w2c(sCB * cCB * cCA)
-    return STV(s, c)
+    return STV(s, c, evidence=stamp_concat(stv_CA.evidence, stv_CB.evidence))
 
 
 def truth_abduction(stv_A, stv_B, stv_C, stv_AC, stv_BC):
@@ -685,11 +660,44 @@ def truth_abduction(stv_A, stv_B, stv_C, stv_AC, stv_BC):
     s = term1 + term2
 
     c = w2c(sAC * cAC * cBC)
-    return STV(s, c)
+    return STV(s, c, evidence=stamp_concat(stv_AC.evidence, stv_BC.evidence))
+
+
+def stamp_disjoint(ev1, ev2):
+    """Check whether two evidence stamps share no common IDs.
+
+    Upstream: StampDisjoint in lib_pln.metta.
+    Returns True if stamps are disjoint (safe to revise).
+    """
+    if ev1 is None or ev2 is None:
+        return True
+    return ev1.isdisjoint(ev2)
+
+
+def stamp_concat(ev1, ev2):
+    """Merge two evidence stamps.
+
+    Upstream: StampConcat in lib_pln.metta.
+    """
+    if ev1 is None and ev2 is None:
+        return None
+    if ev1 is None:
+        return ev2
+    if ev2 is None:
+        return ev1
+    return ev1 | ev2
 
 
 def truth_revision(stv1, stv2):
-    """Combine two independent evidence sources.  lib_pln.metta: Truth_Revision."""
+    """Combine two evidence sources.  lib_pln.metta: Truth_Revision.
+
+    If both STVs carry evidence stamps and stamps overlap,
+    returns None (revision blocked — upstream uses StampDisjoint guard).
+    """
+    # Evidence overlap check (upstream: StampDisjoint)
+    if not stamp_disjoint(stv1.evidence, stv2.evidence):
+        return None
+
     f1, c1 = stv1.strength, stv1.confidence
     f2, c2 = stv2.strength, stv2.confidence
 
@@ -705,12 +713,12 @@ def truth_revision(stv1, stv2):
 
     f = min(1.0, f)
     c = min(1.0, max(c, c1, c2))
-    return STV(f, c)
+    return STV(f, c, evidence=stamp_concat(stv1.evidence, stv2.evidence))
 
 
 def truth_negation(stv):
     """¬A.  lib_pln.metta: Truth_Negation."""
-    return STV(1.0 - stv.strength, stv.confidence)
+    return STV(1.0 - stv.strength, stv.confidence, evidence=stv.evidence)
 
 
 def truth_or(a, b):
@@ -734,7 +742,7 @@ def truth_symmetric_modus_ponens(stv_A, stv_AB):
     snotAB = 0.2
     s = sA * sAB + snotAB * (1.0 - sA) * (1.0 + sAB)
     c = cA * cAB * truth_or(sA, sAB)
-    return STV(s, c)
+    return STV(s, c, evidence=stamp_concat(stv_A.evidence, stv_AB.evidence))
 
 
 def truth_equivalence_to_implication(stv_A, stv_B, stv_AB):
@@ -755,7 +763,7 @@ def truth_equivalence_to_implication(stv_A, stv_B, stv_AB):
         s = sAB
     else:
         s = (1.0 + sB / sA) * sAB / (1.0 + sAB) if sA > 1e-10 else 0.0
-    return STV(s, cAB)
+    return STV(s, cAB, evidence=stv_AB.evidence)
 
 
 def _safe_div(a, b):
@@ -812,7 +820,7 @@ def truth_transitive_similarity(stv_A, stv_B, stv_C, stv_AB, stv_BC):
 
     c = stv_AB.confidence * stv_BC.confidence * truth_or(
         stv_AB.strength, stv_BC.strength)
-    return STV(s, c)
+    return STV(s, c, evidence=stamp_concat(stv_AB.evidence, stv_BC.evidence))
 
 
 def simple_deduction_strength(sA, sB, sC, sAB, sBC):
@@ -850,27 +858,6 @@ def truth_evaluation_implication(stv_A, stv_B, stv_C, stv_AB, stv_AC):
         return STV(1.0, 0.0)
 
     c = sAB * sAC * cAB * cAC
-    return STV(s, c)
+    return STV(s, c, evidence=stamp_concat(stv_AB.evidence, stv_AC.evidence))
 
 
-def consistency_implication_implicant_conjunction(sA, sB, sC, sAC, sBC):
-    """Check conjunction consistency.  lib_pln.metta: Consistency_ImplicationImplicantConjunction.
-
-    Verifies P(C|A) ≤ P(C)/P(A) and P(C|B) ≤ P(C)/P(B).
-    """
-    if sA <= 0 or sB <= 0 or sC <= 0:
-        return False
-    return sAC <= sC / sA and sBC <= sC / sB
-
-
-def compare_stv(name, expected, sampled_strength, tol=0.02):
-    """Compare expected STV against sampled strength.
-
-    Confidence is analytical (not sampled), so only strength is checked.
-    """
-    err = abs(sampled_strength - expected.strength)
-    passed = err < tol
-    mark = "PASS" if passed else "FAIL"
-    print(f"  {name:<36s}  PLN={expected}  "
-          f"gibbs_s={sampled_strength:.4f}  err={err:.4f}  [{mark}]")
-    return passed

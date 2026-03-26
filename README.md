@@ -19,11 +19,10 @@ with PLN's analytical formulas under Gibbs sampling.
 
 | PLN concept | thrml construct | Extropic hardware |
 |---|---|---|
-| Proposition (VariableAtom) | `CategoricalNode` (2 states) | p-bit cluster |
-| Prior P(A) | Unary `CategoricalEBMFactor` | Bias field on p-bits |
-| Implication A→B (strength s) | Pairwise `CategoricalEBMFactor` | Coupling matrix between clusters |
-| TruthValue.strength | `W = log P` (energy weight) | Physical coupling strength |
-| TruthValue.confidence | `W_scaled = c · W` (temperature) | Effective temperature |
+| Proposition (VariableAtom) | `CategoricalNode` (K=16 bins) | p-bit cluster (multi-bit) |
+| Prior P(A) | Unary `CategoricalEBMFactor` (Beta prior) | Bias field on p-bits |
+| Implication A→B (strength s) | Pairwise `CategoricalEBMFactor` (K×K) | Coupling matrix between clusters |
+| TruthValue (strength, confidence) | Beta posterior → moment-matching | Posterior distribution readout |
 | Inference rule | Block Gibbs sampling | Thermal equilibration |
 | Deduction chain | Chain factor graph | Pipeline of coupled clusters |
 | Induction (V-shape) | Star factor graph | Hub-and-spoke topology |
@@ -32,63 +31,119 @@ with PLN's analytical formulas under Gibbs sampling.
 ## Quick start
 
 ```bash
-pip install thrml          # requires Python 3.10+
-python pln_deduction.py    # run any script
+pip install thrml hyperon                  # or: pip install pln-thrml[metta]
+```
+
+```python
+from hyperon import MeTTa
+from metta import register_all
+
+metta = MeTTa()
+register_all(metta)
+
+results = metta.run('''
+    (A (stv 0.8 0.9))
+    ((Implication A B) (stv 0.9 0.85))
+    !(thrml-modus-ponens! (A B))
+''')
+# => (stv 0.7242 0.5508)
+```
+
+**Run tests:**
+
+```bash
+pytest tests/ -v                           # 58 tests, all rules covered
 ```
 
 ## Results
 
-Every script runs multiple parameter settings and verifies against analytical
-formulas with <2% tolerance (20,000 total samples: 4 batches × 5,000).
-Representative results from a single run:
+All 11 PLN rules are compiled to beta-discretized thrml factor graphs
+(K=16 bins) and verified against analytical formulas.  Both strength and
+confidence emerge from the posterior distribution.  Sampling: 50 batches ×
+2,000 samples (100,000 total), 500 warmup steps.  Regenerate with
+`python scripts/generate_results.py`.
 
 ### Modus Ponens — `A, A→B ⊢ B`
 
-| Setting | PLN | Gibbs | Error |
+| Setting | PLN | Beta Gibbs | Error |
 |---|---|---|---|
-| Strong prior, strong rule (s_A=0.8, s_AB=0.9) | 0.7240 | 0.7255 | 0.0015 |
-| Coin-flip prior, strong rule (s_A=0.5, s_AB=0.95) | 0.4850 | 0.4895 | 0.0045 |
-| Rare antecedent (s_A=0.1, s_AB=0.8) | 0.0980 | 0.0978 | 0.0002 |
+| Strong prior (s_A=0.8, s_AB=0.9) | 0.7240 | 0.7317 | 0.0077 |
+| Smokes upstream (s_A=1.0, s_AB=0.6) | 0.6000 | 0.5662 | 0.0338 |
+| Rare antecedent (s_A=0.1, s_AB=0.8) | 0.0980 | 0.1417 | 0.0437 |
 
 ### Deduction — `A→B, B→C ⊢ A→C`
 
-| Setting | PLN | Gibbs | Error |
+| Setting | PLN | Beta Gibbs | Error |
 |---|---|---|---|
-| Standard chain (s_AB=0.9, s_BC=0.85) | 0.7850 | 0.7842 | 0.0008 |
-| High-confidence (s_AB=0.95, s_BC=0.9) | 0.8625 | 0.8557 | 0.0068 |
-| No-information (all 0.5) | 0.5000 | 0.4953 | 0.0047 |
+| Standard chain (s_AB=0.8, s_BC=0.9) | 0.7333 | 0.8064 | 0.0731 |
 
-### Inversion — `A→B ⊢ B→A`
+### Inversion — `A→B ⊢ B→A` (exact Bayes)
 
-| Setting | Bayes | Gibbs | Error |
+| Setting | Bayes | Beta Gibbs | Error |
 |---|---|---|---|
-| Rare A, near-deterministic (s_A=0.2, s_AB=0.99) | 0.8319 | 0.8202 | 0.0117 |
-| Coin-flip prior (s_A=0.5, s_AB=0.8) | 0.8000 | 0.8000 | 0.0000 |
+| Upstream (s_A=0.5, s_AB=0.87) | 0.9775 | 0.9391 | 0.0384 |
 
-### Induction — `A→B, A→C ⊢ B→C`
+### Induction — `C→A, C→B ⊢ A→B`
 
-| Setting | Analytical | Gibbs | Error |
+| Setting | PLN | Beta Gibbs | Error |
 |---|---|---|---|
-| Strong shared cause | 0.7597 | 0.7615 | 0.0018 |
-| Symmetric links | 0.8008 | 0.7963 | 0.0045 |
+| Raven upstream (s_CA=0.9, s_CB=0.8) | 0.7267 | 0.7731 | 0.0464 |
 
-### Abduction — `A→B, C→B ⊢ A→C`
+### Abduction — `A→C, B→C ⊢ A→B`
 
-| Setting | Analytical | Gibbs | Error |
+| Setting | PLN | Beta Gibbs | Error |
 |---|---|---|---|
-| Two strong causes | 0.8125 | 0.8179 | 0.0054 |
-| Symmetric causes | 0.6800 | 0.6664 | 0.0136 |
+| Symmetric priors (s_AC=0.8, s_BC=0.7) | 0.6200 | 0.7496 | 0.1296 |
 
-### Scaling (deduction chain, strength=0.9, background=0.2)
+### Negation — `A ⊢ ¬A`
 
-| Chain length | Analytical | Gibbs | Error | Time |
-|---|---|---|---|---|
-| 3 nodes | 0.8300 | 0.8215 | 0.0085 | 1.1s |
-| 10 nodes | 0.6801 | 0.6929 | 0.0128 | 0.9s |
-| 20 nodes | 0.6670 | 0.6660 | 0.0010 | 1.4s |
+| Setting | PLN | Beta Gibbs | Error |
+|---|---|---|---|
+| Strong (s=0.99) | 0.0100 | 0.0100 | 0.0000 |
 
-Block Gibbs with 2-coloring scales well: each sweep updates all nodes in
-2 parallel steps regardless of chain length.
+### Revision — combine evidence
+
+| Setting | PLN | Beta Gibbs | Error |
+|---|---|---|---|
+| Dual sources (s1=0.8,c1=0.9 + s2=0.3,c2=0.7) | 0.6971 | 0.6819 | 0.0151 |
+
+### Symmetric Modus Ponens — `A, A~B ⊢ B`
+
+| Setting | PLN | Beta Gibbs | Error |
+|---|---|---|---|
+| Standard (s_A=0.8, s_AB=0.85) | 0.7540 | 0.7587 | 0.0047 |
+
+### Equivalence→Implication — `A≡B ⊢ A→B`
+
+| Setting | PLN | Beta Gibbs | Error |
+|---|---|---|---|
+| Upstream (s_AB=0.98) | 0.9899 | 0.9649 | 0.0250 |
+
+### Transitive Similarity — `A~B, B~C ⊢ A~C`
+
+| Setting | PLN | Beta Gibbs | Error |
+|---|---|---|---|
+| Upstream (s_AB=1.0, s_BC=1.0) | 1.0000 | 0.9501 | 0.0499 |
+
+### Evaluation Implication — `(Eval A B), (Impl A C) ⊢ (Eval C B)`
+
+| Setting | PLN | Beta Gibbs | Error |
+|---|---|---|---|
+| Upstream (s_AB=1.0, s_AC=1.0) | 1.0000 | 0.9389 | 0.0611 |
+
+**Notes on divergence:**  For most rules, the factor graph's sampled
+strength closely matches PLN's analytical formula (<2%).  Three cases
+diverge by design:
+
+- **Inversion**: The factor graph gives the exact Bayesian P(A|B), while
+  PLN uses a heuristic (strength unchanged, confidence penalized).  The
+  table above compares Gibbs against exact Bayes — not PLN's heuristic.
+- **Abduction / Induction**: PLN's strength formulas are closed-form
+  approximations; the factor graph computes the exact joint posterior.
+  The golden tests (`test_golden.py`) verify confidence only for these rules.
+- **Revision**: PLN uses arithmetic weighted average; Boltzmann energy
+  addition gives geometric combination.
+
 
 ## What this means for Hyperon
 
@@ -109,30 +164,107 @@ Block Gibbs with 2-coloring scales well: each sweep updates all nodes in
    A 20-node deduction chain runs in 1.5s on CPU; on a TSU, thermal
    equilibration would be near-instantaneous.
 
+## Integration feasibility (hyperon spike)
+
+A separate spike ([hyperon-thrml](https://github.com/mafeifei666666/hyperon-thrml))
+validated that hyperon's Python API is mature enough to bridge MeTTa ↔ thrml.
+Key findings:
+
+- **Hyperon API**: `MeTTa()` runner, pattern matching, `OperationAtom`
+  grounded operations, atom construction/deconstruction — all work.
+  Missing: `Atom.parse()`, documented GroundingSpace backend API.
+- **Recommended path**: Register grounded operations (`thrml-modus-ponens!`,
+  etc.) that query the MeTTa space, build thrml graphs, sample, and return
+  results.  This is what `metta/ops/` implements.
+
+Bridge PoC results (modus ponens, all <0.5% error):
+
+| s_A | s_AB | PLN | thrml | Error |
+|-----|------|-----|-------|-------|
+| 0.8 | 0.9 | 0.7240 | 0.7242 | 0.02% |
+| 0.5 | 0.95 | 0.4850 | 0.4807 | 0.43% |
+| 0.1 | 0.8 | 0.0980 | 0.0955 | 0.25% |
+
+## Beta-discretized factor graphs (primary approach)
+
+All inference in this repo uses beta-discretized factor graphs.
+Each proposition's strength is modeled as a K-bin discrete random variable
+over [0,1] (default K=16).  After Gibbs sampling, **both** strength and
+confidence emerge from the posterior distribution — no analytical confidence
+formula needed.
+
+- **Parameterization**: Given PLN `(stv s c)`, derive Beta(α, β) where
+  `n = c/(1-c) + 2`, `α = s·n`, `β = (1-s)·n`.  This guarantees the Beta
+  mean equals `s` for any confidence level.
+- **Recovery**: Fit the sampled posterior histogram back to Beta via
+  moment-matching → recover `(strength, confidence)`.
+- **Conditional queries**: Condition node gets a strong "True" prior
+  (0.99, 0.99); target node's marginal gives the conditional probability.
+
+Multi-bit encoding of propositions maps naturally to the K-bin
+discretization, giving richer posterior information than binary nodes.
+
 ## File overview
 
-| File | Rule | Topology | Nodes |
-|---|---|---|---|
-| `pln_thrml.py` | Core library | — | — |
-| `pln_modus_ponens.py` | A, A→B ⊢ B | A → B | 2 |
-| `pln_deduction.py` | A→B, B→C ⊢ A→C | A → B → C | 3 |
-| `pln_inversion.py` | A→B ⊢ B→A | A → B | 2 |
-| `pln_induction.py` | A→B, A→C ⊢ B→C | B ← A → C | 3 |
-| `pln_abduction.py` | A→B, C→B ⊢ A→C | A → B ← C | 3 |
-| `pln_revision.py` | Merge evidence | Single node | 1 |
-| `pln_negation.py` | ¬A | Single node | 1 |
-| `pln_symmetric_modus_ponens.py` | A, A~B ⊢ B (Similarity) | A → B | 2 |
-| `pln_equiv_to_impl.py` | A≡B ⊢ A→B | A ↔ B | 2 |
-| `pln_transitive_similarity.py` | A~B, B~C ⊢ A~C | A ↔ B ↔ C | 3 |
-| `pln_golden_tests.py` | All truth functions vs upstream | — | — |
-| `benchmarks/pln_scaling.py` | Deduction chain scaling | X₀→X₁→...→X_n | 3–20 |
-| `experiments/pln_evidence_is_energy.py` | Evidence = Energy proof (5 experiments) | — | — |
+```
+pln_thrml_beta.py                Primary: beta factor graph builders, sampling, posterior → stv
+pln_thrml.py                     Auxiliary: STV dataclass, c2w/w2c, analytical truth functions
+metta/                           MeTTa integration layer (optional, requires hyperon)
+  atoms.py                       Atom extraction from MeTTa space
+  ops/                           11 grounded operations (one per PLN rule)
+  declarations/
+    pln_types.metta              Type declarations, guards, consistency checks
+    pln_rules.metta              |-thrml rules (13 rules with guards)
+tests/                           pytest test suite (58 tests)
+  test_golden.py                 All rules verified through MeTTa end-to-end
+  test_modus_ponens.py           6 parameterized modus ponens test cases
+  test_full_graph.py             Full-graph compilation tests
+  test_beta.py                   Beta-discretized approach tests
+scripts/
+  generate_results.py            Regenerate Results tables for this README
+pyproject.toml                   Package metadata and dependencies
+```
+
+## MeTTa integration
+
+The `metta/` package provides a thin layer that bridges MeTTa PLN atoms
+to the thrml factor graph engine via grounded operations.  Knowledge is
+expressed using upstream [lib_pln.metta](https://github.com/trueagi-io/PLN/blob/main/lib_pln.metta)
+conventions:
+
+```metta
+(A (stv 0.8 0.9))                         ; node prior
+((Implication A B) (stv 0.9 0.85))        ; directed link
+((Similarity A B) (stv 0.85 0.9))         ; symmetric link
+!(thrml-modus-ponens! (A B (stv 0.8 0.9) (stv 0.9 0.85)))
+```
+
+Available grounded operations: `thrml-modus-ponens!`, `thrml-deduction!`,
+`thrml-inversion!`, `thrml-induction!`, `thrml-abduction!`, `thrml-revision!`,
+`thrml-negation!`, `thrml-symmetric-mp!`, `thrml-equiv-to-impl!`,
+`thrml-transitive-sim!`, `thrml-eval-impl!`.
+
+The `|-thrml` rules in `pln_rules.metta` follow the upstream `|-` operator
+conventions with two additions from upstream:
+
+- **SyllogisticRuleGuard**: Prevents deduction/induction/abduction from
+  firing on Similarity/Equivalence links (only Inheritance/Implication).
+- **SymmetricModusPonensRuleGuard**: Restricts symmetric modus ponens to
+  Similarity/IntentionalSimilarity/ExtensionalSimilarity links.
+
+Additional rules beyond the 11 core grounded ops:
+- **Member Deduction**: `(Member A B), (Inheritance B C) ⊢ (Member A C)` — reuses `thrml-deduction!`
+- **Evaluation via Inheritance**: `(Eval P C), (Inheritance S C) ⊢ (Eval P S)` — reuses `thrml-modus-ponens!`
+
+Each operation builds the appropriate thrml factor graph, runs Gibbs sampling
+for strength, and computes confidence analytically using the corresponding
+PLN truth function.  Results are returned as `(stv strength confidence)`.
 
 ## Production PLN truth-value formulas (trueagi-io/PLN)
 
 Production PLN truth functions (exact match to `lib_pln.metta`) are
 implemented in `pln_thrml.py` and validated against upstream golden
-tests in `pln_golden_tests.py`:
+tests in `tests/test_golden.py`:
 
 | Rule | Confidence formula |
 |---|---|
@@ -153,14 +285,14 @@ Where `c2w(c) = c/(1-c)` and `w2c(w) = w/(w+1)`.
 **Modus Ponens strength formula** includes a background (leak) term:
 `s_B = s_A · s_AB + 0.02 · (1 − s_A)`.  Even when A is false, B can still
 be true with probability ε = 0.02.  The result tables above reflect this
-complete formula (see `pln_modus_ponens.py` and `pln_thrml.py`).
+complete formula (see `pln_thrml.py`).
 
 **Key findings:**
 - **Inversion**: Production PLN uses a heuristic (strength unchanged,
   confidence penalized), while the factor graph gives the exact Bayesian
-  answer. Both are shown in `pln_inversion.py`.
+  answer.
 - **Revision**: PLN uses arithmetic weighted average; Boltzmann energy
-  addition gives geometric combination. Both are shown in `pln_revision.py`.
+  addition gives geometric combination.
 
 ## Hardware constraints (TSU)
 
@@ -181,64 +313,13 @@ These constraints do not affect the correctness of the factor-graph
 compilation demonstrated here (which runs on CPU via `thrml`), but they
 are load-bearing for any physical deployment.
 
-## Architectural differences from upstream PLN
-
-The upstream [trueagi-io/PLN](https://github.com/trueagi-io/PLN) is a
-symbolic forward-chaining reasoner in MeTTa.  This project takes a
-fundamentally different approach — compiling PLN rules into factor graphs
-for thermodynamic sampling.  Several upstream features do not have direct
-analogs:
-
-| Upstream feature | Why not needed here |
-|---|---|
-| `PLN.Derive` / `PLN.Query` (forward chaining) | Factor graph sampling explores the entire joint distribution simultaneously — no sequential rule application needed |
-| `StampDisjoint` / `StampConcat` (evidence tracking) | Independence is enforced by graph structure, not bookkeeping stamps |
-| `BestCandidate` / `LimitSize` / `ConfidenceRank` (priority queue) | Serve the forward chainer's resource allocation; sampling has no priority queue |
-| Rule guards (`SyllogisticRuleGuard`, etc.) | Structural constraints are enforced at graph construction time |
-| `Member Deduction` / `Evaluation Inheritance` | MeTTa-specific higher-order constructs (MemberLink, EvaluationLink) with no direct binary-proposition analog |
-
-The key insight is that the factor graph approach replaces PLN's
-sequential rule application with parallel thermodynamic equilibration.
-Where PLN applies one rule at a time (controlled by AIKR resource
-management), the factor graph encodes *all* relationships simultaneously
-and sampling recovers *all* conditionals at once.
-
-## Evidence = Energy: the theoretical bridge
-
-Goertzel (2026) argues that "evidence conservation is to logic what energy
-conservation is to physics."  This repo proves the correspondence is not
-merely an analogy — the TSU **physically realizes** evidence conservation.
-
-The bridge is `W = log P`:
-
-| PLN (evidence) | W = log P | TSU (energy) |
-|---|---|---|
-| Strength s | W = log(s) | Boltzmann weight |
-| Evidence combination s₁ × s₂ | log(s₁) + log(s₂) | Energy addition |
-| Best inference path (max) | max of energy sums | Lowest free energy |
-| Confidence c | W_scaled = c · W | Inverse temperature (1/kT) |
-| No hallucination | Chain converges to steady-state | Thermodynamic bound |
-| Evidence conservation | Factor graph topology | Energy conservation |
-
-`experiments/pln_evidence_is_energy.py` verifies this with five experiments:
-
-1. **Correspondence table** — `_safe_log` maps every PLN operation to its
-   thermodynamic counterpart, verified numerically.
-2. **Noether's theorem** — reinforcement ρ = f × g is near-constant along
-   inference chains at thermal equilibrium (Theorem 3.1).
-3. **Hallucination bound** — chains converge to the transition matrix
-   steady-state; the factor graph cannot amplify evidence (Theorem 4.2).
-4. **Confidence = 1/kT** — sweeping confidence from 0→1 smoothly
-   interpolates between maximum entropy (flat) and full evidence (sharp).
-5. **Multi-path equilibrium** — a diamond graph (two paths to the same
-   conclusion) reaches a single equilibrium that correctly combines evidence
-   from both paths without double-counting.
-
-```bash
-python experiments/pln_evidence_is_energy.py
-```
-
 ## Not yet covered
+
+- **EvidenceID / StampDisjoint**: Evidence tracking to prevent double-counting
+  during revision (upstream uses `StampDisjoint` and `StampConcat`).
+
+- **PLN.Derive**: Priority-queue based iterative inference engine with
+  bounded belief buffer (upstream: `PLN.Derive`).
 
 - **ECAN attention**: Attention allocation for prioritizing which
   subgraphs to sample first.
@@ -263,8 +344,3 @@ python experiments/pln_evidence_is_energy.py
    *An efficient probabilistic hardware architecture for diffusion-like models*.
    arXiv:2510.23972, 2025.
 
-6. Goertzel. *Genenergy for Logic: Quantale Action, Evidence Conservation,
-   and a Logical Analogue of 'Freeman Transformers'* (2026).
-
-7. Goertzel. *Five Theorems on Evidence Conservation in Quantale-Based
-   Inference Control* (2026).

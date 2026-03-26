@@ -1,0 +1,17 @@
+[project]
+name = "pln-thrml"
+version = "0.2.0"
+description = "PLN inference rules compiled to thermodynamic factor graphs"
+requires-python = ">=3.10"
+dependencies = [
+    "thrml",
+    "jax",
+    "numpy",
+]
+
+[project.optional-dependencies]
+metta = ["hyperon"]
+dev = ["pytest"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
