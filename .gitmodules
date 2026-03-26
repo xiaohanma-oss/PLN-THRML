@@ -1,0 +1,3 @@
+[submodule "vendor/PLN"]
+	path = vendor/PLN
+	url = https://github.com/trueagi-io/PLN.git

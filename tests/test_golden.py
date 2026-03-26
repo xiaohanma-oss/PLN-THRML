@@ -2,10 +2,10 @@
 Golden tests — verify all thrml grounded ops through MeTTa end-to-end.
 
 With the beta approach, both strength and confidence emerge from the
-posterior distribution.  Strength is compared against PLN analytical
-formulas (which should agree for most rules).  Confidence is checked
-for positivity (evidence exists) rather than exact match against
-PLN's analytical formulas (which are heuristic for some rules).
+posterior distribution.  Strength is compared against upstream PLN
+truth functions (lib_pln.metta).  Confidence is checked for positivity
+(evidence exists) rather than exact match against PLN's analytical
+formulas (which are heuristic for some rules).
 
 Sources:
   ruletests/inversion.metta
@@ -17,17 +17,13 @@ Sources:
   examples/RavenInduction.metta
 """
 
-from pln_thrml import (
-    STV, truth_modus_ponens, truth_deduction,
-    truth_negation, truth_symmetric_modus_ponens,
-)
-from conftest import STRENGTH_TOL, parse_stv
+from conftest import STRENGTH_TOL, parse_stv, upstream_truth
 
 
 # ── Modus Ponens (upstream: examples/Smokes.metta + custom cases) ───────
 
 class TestModusPonens:
-    def test_upstream_smokes(self, metta):
+    def test_upstream_smokes(self, metta, pln_lib):
         """From examples/Smokes.metta:
         Edward smokes (stv 1.0 0.9), smokes→cancerous (stv 0.6 0.9)
         """
@@ -36,45 +32,49 @@ class TestModusPonens:
             ((Implication Edward Cancerous) (stv 0.6 0.9))
             !(thrml-modus-ponens! (Edward Cancerous (stv 1.0 0.9) (stv 0.6 0.9)))
         """))
-        expected = truth_modus_ponens(STV(1.0, 0.9), STV(0.6, 0.9))
-        assert abs(s - expected.strength) < STRENGTH_TOL
+        exp_s, _ = upstream_truth(pln_lib, "Truth_ModusPonens",
+                                  (1.0, 0.9), (0.6, 0.9))
+        assert abs(s - exp_s) < STRENGTH_TOL
         assert c > 0.0
 
-    def test_strong(self, metta):
+    def test_strong(self, metta, pln_lib):
         s, c = parse_stv(metta.run("""
             (A (stv 0.8 0.9))
             ((Implication A B) (stv 0.9 0.85))
             !(thrml-modus-ponens! (A B (stv 0.8 0.9) (stv 0.9 0.85)))
         """))
-        expected = truth_modus_ponens(STV(0.8, 0.9), STV(0.9, 0.85))
-        assert abs(s - expected.strength) < STRENGTH_TOL
+        exp_s, _ = upstream_truth(pln_lib, "Truth_ModusPonens",
+                                  (0.8, 0.9), (0.9, 0.85))
+        assert abs(s - exp_s) < STRENGTH_TOL
         assert c > 0.0
 
-    def test_medium(self, metta):
+    def test_medium(self, metta, pln_lib):
         s, c = parse_stv(metta.run("""
             (A (stv 0.5 0.8))
             ((Implication A B) (stv 0.95 0.9))
             !(thrml-modus-ponens! (A B (stv 0.5 0.8) (stv 0.95 0.9)))
         """))
-        expected = truth_modus_ponens(STV(0.5, 0.8), STV(0.95, 0.9))
-        assert abs(s - expected.strength) < STRENGTH_TOL
+        exp_s, _ = upstream_truth(pln_lib, "Truth_ModusPonens",
+                                  (0.5, 0.8), (0.95, 0.9))
+        assert abs(s - exp_s) < STRENGTH_TOL
         assert c > 0.0
 
-    def test_rare(self, metta):
+    def test_rare(self, metta, pln_lib):
         s, c = parse_stv(metta.run("""
             (A (stv 0.1 0.7))
             ((Implication A B) (stv 0.8 0.75))
             !(thrml-modus-ponens! (A B (stv 0.1 0.7) (stv 0.8 0.75)))
         """))
-        expected = truth_modus_ponens(STV(0.1, 0.7), STV(0.8, 0.75))
-        assert abs(s - expected.strength) < STRENGTH_TOL
+        exp_s, _ = upstream_truth(pln_lib, "Truth_ModusPonens",
+                                  (0.1, 0.7), (0.8, 0.75))
+        assert abs(s - exp_s) < STRENGTH_TOL
         assert c > 0.0
 
 
 # ── Deduction (upstream: examples/DeductionRevision.metta) ──────────────
 
 class TestDeduction:
-    def test_smokes_pattern(self, metta):
+    def test_smokes_pattern(self, metta, pln_lib):
         s, c = parse_stv(metta.run("""
             (A (stv 0.5 0.9))
             (B (stv 0.4 0.9))
@@ -125,15 +125,15 @@ class TestInversion:
 # ── Negation (upstream: RuleTester.metta) ───────────────────────────────
 
 class TestNegation:
-    def test_upstream(self, metta):
+    def test_upstream(self, metta, pln_lib):
         """Negation is purely analytical — no sampling."""
         s, c = parse_stv(metta.run("""
             (Penguin (stv 0.99 0.9))
             !(thrml-negation! (Penguin (stv 0.99 0.9)))
         """))
-        expected = truth_negation(STV(0.99, 0.9))
-        assert abs(s - expected.strength) < 0.001
-        assert abs(c - expected.confidence) < 0.001
+        exp_s, exp_c = upstream_truth(pln_lib, "Truth_Negation", (0.99, 0.9))
+        assert abs(s - exp_s) < 0.001
+        assert abs(c - exp_c) < 0.001
 
     def test_half(self, metta):
         s, c = parse_stv(metta.run("""
@@ -159,14 +159,15 @@ class TestRevision:
 # ── Symmetric Modus Ponens (no upstream ruletest — custom case) ─────────
 
 class TestSymmetricModusPonens:
-    def test_basic(self, metta):
+    def test_basic(self, metta, pln_lib):
         s, c = parse_stv(metta.run("""
             (A (stv 0.8 0.9))
             ((Similarity A B) (stv 0.85 0.9))
             !(thrml-symmetric-mp! (A B (stv 0.8 0.9) (stv 0.85 0.9)))
         """))
-        expected = truth_symmetric_modus_ponens(STV(0.8, 0.9), STV(0.85, 0.9))
-        assert abs(s - expected.strength) < STRENGTH_TOL
+        exp_s, _ = upstream_truth(pln_lib, "Truth_SymmetricModusPonens",
+                                  (0.8, 0.9), (0.85, 0.9))
+        assert abs(s - exp_s) < STRENGTH_TOL
         assert c > 0.0
 
 

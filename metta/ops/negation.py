@@ -4,7 +4,6 @@ thrml-negation! — ¬A: purely analytical, no sampling needed.
 Upstream: lib_pln.metta Truth_Negation
 """
 
-from pln_thrml import STV, truth_negation
 from metta.atoms import parse_stv_param, make_stv, make_error
 
 
@@ -18,8 +17,6 @@ def make_op(metta_ref):
             return [make_error("expected (A (stv ..))")]
 
         s, c = parse_stv_param(children[1])
-
-        result = truth_negation(STV(s, c))
-        return [make_stv(result.strength, result.confidence)]
+        return [make_stv(1.0 - s, c)]
 
     return thrml_negation

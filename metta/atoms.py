@@ -95,10 +95,6 @@ def extract_similarities(metta):
 def extract_equivalences(metta):
     return extract_links(metta, "Equivalence")
 
-def extract_evaluations(metta):
-    return extract_links(metta, "Evaluation")
-
-
 def extract_backgrounds(metta):
     """Query space for ((Background src dst) rate).
 
@@ -121,20 +117,6 @@ def find_prior(priors, name, default_s=0.5, default_c=0.5):
     if p is None:
         return default_s, default_c
     return p["strength"], p["confidence"]
-
-def find_link(links, src, dst):
-    for link in links:
-        if link["src"] == src and link["dst"] == dst:
-            return link
-    return None
-
-def find_link_symmetric(links, a, b):
-    for link in links:
-        if (link["src"] == a and link["dst"] == b) or \
-           (link["src"] == b and link["dst"] == a):
-            return link
-    return None
-
 
 # ── Result constructors ──────────────────────────────────────────────────
 

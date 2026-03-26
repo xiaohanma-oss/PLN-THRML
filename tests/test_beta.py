@@ -3,8 +3,8 @@
 import pytest
 import jax.numpy as jnp
 
-from pln_thrml import STV, c2w, w2c, truth_modus_ponens, truth_deduction
 from pln_thrml_beta import (
+    c2w, w2c,
     DEFAULT_K, bin_centers, bin_width,
     stv_to_beta_params, posterior_to_stv, effective_k,
     beta_prior_weights, beta_implication_weights,
@@ -12,9 +12,7 @@ from pln_thrml_beta import (
     estimate_beta_marginal, estimate_beta_conditional,
     diagnose_convergence,
 )
-
-STRENGTH_TOL = 0.05   # looser than binary (0.02) due to K=16 discretization
-CONFIDENCE_TOL = 0.15  # confidence is approximate (moment-matching)
+from conftest import STRENGTH_TOL, CONFIDENCE_TOL, upstream_truth
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -202,9 +200,10 @@ MP_CASES = [
 
 class TestModusPonens:
     @pytest.mark.parametrize("s_A,c_A,s_AB,c_AB", MP_CASES)
-    def test_strength(self, s_A, c_A, s_AB, c_AB):
-        """Beta modus ponens strength should match PLN analytical formula."""
-        expected = truth_modus_ponens(STV(s_A, c_A), STV(s_AB, c_AB))
+    def test_strength(self, pln_lib, s_A, c_A, s_AB, c_AB):
+        """Beta modus ponens strength should match upstream PLN formula."""
+        exp_s, _ = upstream_truth(pln_lib, "Truth_ModusPonens",
+                                  (s_A, c_A), (s_AB, c_AB))
 
         graph = build_beta_chain(
             priors=[s_A, 0.5],
@@ -215,7 +214,7 @@ class TestModusPonens:
         )
         samples = run_beta_sampling(graph, seed=42)
         _, s_out, _ = estimate_beta_marginal(samples, graph, graph["nodes"][1])
-        assert s_out == pytest.approx(expected.strength, abs=STRENGTH_TOL)
+        assert s_out == pytest.approx(exp_s, abs=STRENGTH_TOL)
 
     def test_confidence_ordering(self):
         """Higher input confidence should produce higher output confidence."""
@@ -571,33 +570,3 @@ class TestConvergenceDiagnostics:
         assert "ess" in diag
         assert "converged" in diag
         assert isinstance(diag["converged"], bool)
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-#  Comparison: binary vs Beta strength agreement
-# ═══════════════════════════════════════════════════════════════════════════
-
-class TestBinaryVsBeta:
-    def test_modus_ponens_strength_agrees(self):
-        """Binary and Beta approaches should produce similar strength."""
-        from pln_thrml import build_chain, run_sampling, estimate_marginal
-
-        s_A, s_AB = 0.8, 0.9
-
-        # Binary approach
-        bin_graph = build_chain(
-            priors=[s_A, 0.5], strengths=[s_AB], backgrounds=[0.02])
-        bin_samples = run_sampling(bin_graph, seed=42)
-        bin_s = estimate_marginal(bin_samples, bin_graph, bin_graph["nodes"][1])
-
-        # Beta approach
-        beta_graph = build_beta_chain(
-            priors=[s_A, 0.5], confidences=[0.9, 0.01],
-            strengths=[s_AB], impl_confidences=[0.9],
-            backgrounds=[0.02],
-        )
-        beta_samples = run_beta_sampling(beta_graph, seed=42)
-        _, beta_s, _ = estimate_beta_marginal(
-            beta_samples, beta_graph, beta_graph["nodes"][1])
-
-        assert beta_s == pytest.approx(bin_s, abs=STRENGTH_TOL)

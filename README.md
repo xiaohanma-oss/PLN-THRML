@@ -1,4 +1,4 @@
-# PLN on Thermodynamic Hardware: A Working Demo
+# PLN-THRML: Probabilistic Logic Networks on Thermodynamic Sampling Unit
 
 ## The idea in 30 seconds
 
@@ -52,7 +52,7 @@ results = metta.run('''
 **Run tests:**
 
 ```bash
-pytest tests/ -v                           # 58 tests, all rules covered
+pytest tests/ -v                           # 88 tests, all rules covered
 ```
 
 ## Results
@@ -61,7 +61,7 @@ All 11 PLN rules are compiled to beta-discretized thrml factor graphs
 (K=16 bins) and verified against analytical formulas.  Both strength and
 confidence emerge from the posterior distribution.  Sampling: 50 batches ×
 2,000 samples (100,000 total), 500 warmup steps.  Regenerate with
-`python scripts/generate_results.py`.
+`pytest tests/ -v`.
 
 ### Modus Ponens — `A, A→B ⊢ B`
 
@@ -208,20 +208,16 @@ discretization, giving richer posterior information than binary nodes.
 
 ```
 pln_thrml_beta.py                Primary: beta factor graph builders, sampling, posterior → stv
-pln_thrml.py                     Auxiliary: STV dataclass, c2w/w2c, analytical truth functions
+                                 Also contains PLN utilities: c2w/w2c, EPS, DEFAULT_EPSILON
+vendor/PLN/                      Upstream trueagi-io/PLN (git submodule) — test baselines
 metta/                           MeTTa integration layer (optional, requires hyperon)
   atoms.py                       Atom extraction from MeTTa space
-  ops/                           11 grounded operations (one per PLN rule)
+  ops/                           11 grounded operations + full-graph compile/query
   declarations/
-    pln_types.metta              Type declarations, guards, consistency checks
-    pln_rules.metta              |-thrml rules (13 rules with guards)
-tests/                           pytest test suite (58 tests)
+    pln_types.metta              Type declarations (stv, Implication, Similarity, etc.)
+tests/
   test_golden.py                 All rules verified through MeTTa end-to-end
-  test_modus_ponens.py           6 parameterized modus ponens test cases
-  test_full_graph.py             Full-graph compilation tests
   test_beta.py                   Beta-discretized approach tests
-scripts/
-  generate_results.py            Regenerate Results tables for this README
 pyproject.toml                   Package metadata and dependencies
 ```
 
@@ -244,27 +240,18 @@ Available grounded operations: `thrml-modus-ponens!`, `thrml-deduction!`,
 `thrml-negation!`, `thrml-symmetric-mp!`, `thrml-equiv-to-impl!`,
 `thrml-transitive-sim!`, `thrml-eval-impl!`.
 
-The `|-thrml` rules in `pln_rules.metta` follow the upstream `|-` operator
-conventions with two additions from upstream:
+Each operation builds the appropriate thrml factor graph, runs Gibbs sampling,
+and returns results as `(stv strength confidence)`.
 
-- **SyllogisticRuleGuard**: Prevents deduction/induction/abduction from
-  firing on Similarity/Equivalence links (only Inheritance/Implication).
-- **SymmetricModusPonensRuleGuard**: Restricts symmetric modus ponens to
-  Similarity/IntentionalSimilarity/ExtensionalSimilarity links.
+Additionally, `thrml-compile!` / `thrml-query!` compile the entire knowledge
+base into a single factor graph with graph-coloring-based parallel Block
+Gibbs sampling — the path toward TSU hardware execution.
 
-Additional rules beyond the 11 core grounded ops:
-- **Member Deduction**: `(Member A B), (Inheritance B C) ⊢ (Member A C)` — reuses `thrml-deduction!`
-- **Evaluation via Inheritance**: `(Eval P C), (Inheritance S C) ⊢ (Eval P S)` — reuses `thrml-modus-ponens!`
+## PLN truth-value formulas (trueagi-io/PLN)
 
-Each operation builds the appropriate thrml factor graph, runs Gibbs sampling
-for strength, and computes confidence analytically using the corresponding
-PLN truth function.  Results are returned as `(stv strength confidence)`.
-
-## Production PLN truth-value formulas (trueagi-io/PLN)
-
-Production PLN truth functions (exact match to `lib_pln.metta`) are
-implemented in `pln_thrml.py` and validated against upstream golden
-tests in `tests/test_golden.py`:
+PLN truth functions are defined in upstream `lib_pln.metta` (included as a
+git submodule at `vendor/PLN/`).  Tests in `test_golden.py` call these
+upstream functions directly as baselines:
 
 | Rule | Confidence formula |
 |---|---|
@@ -285,7 +272,7 @@ Where `c2w(c) = c/(1-c)` and `w2c(w) = w/(w+1)`.
 **Modus Ponens strength formula** includes a background (leak) term:
 `s_B = s_A · s_AB + 0.02 · (1 − s_A)`.  Even when A is false, B can still
 be true with probability ε = 0.02.  The result tables above reflect this
-complete formula (see `pln_thrml.py`).
+complete formula (see `Truth_ModusPonens` in upstream `lib_pln.metta`).
 
 **Key findings:**
 - **Inversion**: Production PLN uses a heuristic (strength unchanged,

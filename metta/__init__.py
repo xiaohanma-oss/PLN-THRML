@@ -3,7 +3,7 @@ metta — MeTTa thin layer for PLN thermodynamic inference
 =========================================================
 
 Registers grounded operations that bridge MeTTa PLN atoms to
-pln_thrml's thrml factor graph engine.
+pln_thrml_beta's thrml factor graph engine.
 
 Usage:
     from hyperon import MeTTa

@@ -23,7 +23,25 @@ from thrml.pgm import CategoricalNode
 from thrml.models.discrete_ebm import CategoricalEBMFactor, CategoricalGibbsConditional
 from thrml.factor import FactorSamplingProgram
 
-from pln_thrml import c2w, w2c, EPS, DEFAULT_EPSILON
+# ── PLN truth-value utilities (formerly pln_truth.py) ────────────────────
+EPS = 1e-7          # clamp for log-safety
+DEFAULT_EPSILON = 0.02  # PLN modus-ponens background rate
+
+
+def c2w(c):
+    """Confidence → evidence weight.  lib_pln.metta: Truth_c2w = c/(1-c)."""
+    if c >= 1.0:
+        return float('inf')
+    if c <= 0.0:
+        return 0.0
+    return c / (1.0 - c)
+
+
+def w2c(w):
+    """Evidence weight → confidence.  lib_pln.metta: Truth_w2c = w/(w+1)."""
+    if w < 0:
+        return 0.0
+    return w / (w + 1.0)
 
 # ── constants ────────────────────────────────────────────────────────────
 DEFAULT_K = 16
