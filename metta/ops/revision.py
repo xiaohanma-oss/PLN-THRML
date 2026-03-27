@@ -6,8 +6,7 @@ Topology: 1-node, dual Beta priors (energy addition = Beta multiplication = Baye
 """
 
 from pln_thrml_beta import (
-    make_beta_prior_factor, run_beta_sampling, estimate_beta_marginal,
-    DEFAULT_K,
+    make_beta_prior_factor, sample_and_measure, DEFAULT_K,
 )
 from thrml.pgm import CategoricalNode
 from thrml.block_management import Block
@@ -51,7 +50,7 @@ def make_op(metta_ref):
                 sub = children[1].get_children()
                 if str(sub[0]) == "stv":
                     is_stv_format = True
-            except:
+            except Exception:
                 pass
 
         if is_stv_format:
@@ -67,10 +66,7 @@ def make_op(metta_ref):
             return [make_error("expected (thrml-revision! (A s1 c1 s2 c2)) or (thrml-revision! (T (stv s1 c1) (stv s2 c2)))")]
 
         graph = _build_beta_revision_graph(s1, c1, s2, c2)
-        samples = run_beta_sampling(graph, seed=42)
-        _, strength, confidence = estimate_beta_marginal(
-            samples, graph, graph["nodes"][0])
-
+        strength, confidence = sample_and_measure(graph, graph["nodes"][0])
         return [make_stv(strength, confidence)]
 
     return thrml_revision

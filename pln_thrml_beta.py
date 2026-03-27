@@ -23,7 +23,7 @@ from thrml.pgm import CategoricalNode
 from thrml.models.discrete_ebm import CategoricalEBMFactor, CategoricalGibbsConditional
 from thrml.factor import FactorSamplingProgram
 
-# ── PLN truth-value utilities (formerly pln_truth.py) ────────────────────
+# ── PLN truth-value utilities ────────────────────
 EPS = 1e-7          # clamp for log-safety
 DEFAULT_EPSILON = 0.02  # PLN modus-ponens background rate
 
@@ -216,6 +216,21 @@ def make_beta_implication_factor(parent, child, strength, confidence,
 #  Graph builders
 # ═══════════════════════════════════════════════════════════════════════════
 
+def _assemble_free_graph(nodes, factors, free_blocks, k=DEFAULT_K, **extra):
+    """Assemble a fully free (no clamp) factor graph into a sampling program."""
+    spec = BlockGibbsSpec(free_blocks, [])
+    sampler = CategoricalGibbsConditional(n_categories=k)
+    prog = FactorSamplingProgram(
+        gibbs_spec=spec,
+        samplers=[sampler] * len(free_blocks),
+        factors=factors, other_interaction_groups=[])
+    result = dict(nodes=nodes, factors=factors, free_blocks=free_blocks,
+                  clamped_blocks=[], spec=spec, program=prog,
+                  k=k, single_node=False)
+    result.update(extra)
+    return result
+
+
 def _beta_prior_logits(strength, confidence, k=DEFAULT_K):
     """Log-probabilities for sampling a node's clamped state from its Beta prior."""
     w = beta_prior_weights(strength, confidence, k)
@@ -295,18 +310,7 @@ def build_beta_chain(priors, confidences, strengths, impl_confidences,
         even = [nodes[i] for i in range(0, n, 2)]
         odd = [nodes[i] for i in range(1, n, 2)]
         free_blocks = [Block(even), Block(odd)] if odd else [Block(even)]
-
-        spec = BlockGibbsSpec(free_blocks, [])
-        sampler = CategoricalGibbsConditional(n_categories=k)
-        prog = FactorSamplingProgram(
-            gibbs_spec=spec,
-            samplers=[sampler] * len(free_blocks),
-            factors=factors,
-            other_interaction_groups=[],
-        )
-        return dict(nodes=nodes, factors=factors, free_blocks=free_blocks,
-                    clamped_blocks=[], spec=spec, program=prog,
-                    n=n, k=k, single_node=False)
+        return _assemble_free_graph(nodes, factors, free_blocks, k, n=n)
 
 
 def build_beta_v_graph(root_prior, root_confidence,
@@ -339,21 +343,9 @@ def build_beta_v_graph(root_prior, root_confidence,
 
     # Coloring: {left, right} and {root}
     free_blocks = [Block([left, right]), Block([root])]
-    spec = BlockGibbsSpec(free_blocks, [])
-    sampler = CategoricalGibbsConditional(n_categories=k)
-
-    prog = FactorSamplingProgram(
-        gibbs_spec=spec,
-        samplers=[sampler, sampler],
-        factors=factors,
-        other_interaction_groups=[],
-    )
-
-    return dict(root=root, left=left, right=right,
-                nodes=[root, left, right],
-                factors=factors, free_blocks=free_blocks,
-                clamped_blocks=[], spec=spec, program=prog,
-                k=k, single_node=False)
+    return _assemble_free_graph(
+        [root, left, right], factors, free_blocks, k,
+        root=root, left=left, right=right)
 
 
 def build_beta_inv_v_graph(left_prior, left_confidence,
@@ -386,21 +378,9 @@ def build_beta_inv_v_graph(left_prior, left_confidence,
 
     # Coloring: {left, right} and {center}
     free_blocks = [Block([left, right]), Block([center])]
-    spec = BlockGibbsSpec(free_blocks, [])
-    sampler = CategoricalGibbsConditional(n_categories=k)
-
-    prog = FactorSamplingProgram(
-        gibbs_spec=spec,
-        samplers=[sampler, sampler],
-        factors=factors,
-        other_interaction_groups=[],
-    )
-
-    return dict(left=left, center=center, right=right,
-                nodes=[left, center, right],
-                factors=factors, free_blocks=free_blocks,
-                clamped_blocks=[], spec=spec, program=prog,
-                k=k, single_node=False)
+    return _assemble_free_graph(
+        [left, center, right], factors, free_blocks, k,
+        left=left, center=center, right=right)
 
 
 def build_beta_symmetric_pair(prior_a, confidence_a,
@@ -425,20 +405,7 @@ def build_beta_symmetric_pair(prior_a, confidence_a,
     ]
 
     free_blocks = [Block([a]), Block([b])]
-    spec = BlockGibbsSpec(free_blocks, [])
-    sampler = CategoricalGibbsConditional(n_categories=k)
-
-    prog = FactorSamplingProgram(
-        gibbs_spec=spec,
-        samplers=[sampler, sampler],
-        factors=factors,
-        other_interaction_groups=[],
-    )
-
-    return dict(a=a, b=b, nodes=[a, b],
-                factors=factors, free_blocks=free_blocks,
-                clamped_blocks=[], spec=spec, program=prog,
-                k=k, single_node=False)
+    return _assemble_free_graph([a, b], factors, free_blocks, k, a=a, b=b)
 
 
 def build_beta_symmetric_chain(priors, confidences, strengths, impl_confidences,
@@ -469,19 +436,37 @@ def build_beta_symmetric_chain(priors, confidences, strengths, impl_confidences,
     even = [nodes[i] for i in range(0, n, 2)]
     odd = [nodes[i] for i in range(1, n, 2)]
     free_blocks = [Block(even), Block(odd)] if odd else [Block(even)]
-    spec = BlockGibbsSpec(free_blocks, [])
-    sampler = CategoricalGibbsConditional(n_categories=k)
+    return _assemble_free_graph(nodes, factors, free_blocks, k, n=n)
 
-    prog = FactorSamplingProgram(
-        gibbs_spec=spec,
-        samplers=[sampler] * len(free_blocks),
-        factors=factors,
-        other_interaction_groups=[],
-    )
 
-    return dict(nodes=nodes, factors=factors, free_blocks=free_blocks,
-                clamped_blocks=[], spec=spec, program=prog,
-                n=n, k=k, single_node=False)
+def _greedy_color(names, adjacency):
+    """Greedy graph coloring — nodes of the same color share no factors and can be sampled in parallel.
+
+    Parameters
+    ----------
+    names : list[str]
+        Sorted node names (deterministic ordering).
+    adjacency : dict[str, set[str]]
+        For each node, the set of nodes it shares a factor edge with.
+
+    Returns
+    -------
+    list[list[str]]
+        Groups of node names, one list per color.
+    """
+    color_of = {}
+    for name in names:
+        neighbor_colors = {color_of[nb] for nb in adjacency.get(name, set())
+                          if nb in color_of}
+        c = 0
+        while c in neighbor_colors:
+            c += 1
+        color_of[name] = c
+    n_colors = max(color_of.values()) + 1 if color_of else 1
+    groups = [[] for _ in range(n_colors)]
+    for name in names:
+        groups[color_of[name]].append(name)
+    return [g for g in groups if g]
 
 
 def build_beta_full_graph(priors, implications, similarities=None,
@@ -492,7 +477,8 @@ def build_beta_full_graph(priors, implications, similarities=None,
     produces a single factor graph.  One round of Gibbs sampling then yields
     samples from the full joint distribution.
 
-    All nodes are free (no clamping).  Single-node-per-block for arbitrary topologies.
+    All nodes are free (no clamping).  Graph-coloring block assignment for
+    efficient mixing — nodes that share no factor edge are sampled together.
 
     Parameters
     ----------
@@ -545,9 +531,19 @@ def build_beta_full_graph(priors, implications, similarities=None,
         factors.append(make_beta_implication_factor(
             b, a, link["strength"], link["confidence"], bg, k))
 
-    # Single-node-per-block (works for any topology)
-    node_list = list(name_to_node.values())
-    free_blocks = [Block([node]) for node in node_list]
+    # Build adjacency from factor links
+    sorted_names = sorted(names)
+    adjacency = {name: set() for name in sorted_names}
+    for link in implications:
+        adjacency[link["src"]].add(link["dst"])
+        adjacency[link["dst"]].add(link["src"])
+    for link in similarities + equivalences:
+        adjacency[link["src"]].add(link["dst"])
+        adjacency[link["dst"]].add(link["src"])
+
+    # Graph coloring → one Block per color group
+    color_groups = _greedy_color(sorted_names, adjacency)
+    free_blocks = [Block([name_to_node[n] for n in group]) for group in color_groups]
     spec = BlockGibbsSpec(free_blocks, [])
     samplers = [CategoricalGibbsConditional(n_categories=k) for _ in free_blocks]
 
@@ -627,6 +623,16 @@ def run_beta_sampling(graph, seed=42, n_batches=None, schedule=None):
         ))(init_state, keys)
 
     return samples
+
+
+def sample_and_measure(graph, target_node, seed=42):
+    """Run sampling and return (strength, confidence) for a target node.
+
+    Convenience wrapper combining run_beta_sampling + estimate_beta_marginal.
+    """
+    samples = run_beta_sampling(graph, seed=seed)
+    _, strength, confidence = estimate_beta_marginal(samples, graph, target_node)
+    return strength, confidence
 
 
 # ═══════════════════════════════════════════════════════════════════════════

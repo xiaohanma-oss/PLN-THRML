@@ -5,20 +5,15 @@ Upstream: lib_pln.metta Truth_SymmetricModusPonens
 Topology: 2-node chain with computed background rate
 """
 
-from pln_thrml_beta import (
-    build_beta_chain, run_beta_sampling, estimate_beta_marginal,
-)
-from metta.atoms import parse_stv_param, make_stv, make_error
+from pln_thrml_beta import build_beta_chain, sample_and_measure
+from metta.atoms import parse_stv_param, make_stv, validate_op_args
 
 
 def make_op(metta_ref):
     def thrml_symmetric_mp(*atoms):
-        if len(atoms) < 1:
-            return [make_error("expected (thrml-symmetric-mp! (A B T1 T2))")]
-
-        children = atoms[0].get_children()
-        if len(children) < 4:
-            return [make_error("expected (A B (stv ..) (stv ..))")]
+        children, err = validate_op_args(atoms, 4, "thrml-symmetric-mp!", "A B (stv ..) (stv ..)")
+        if err:
+            return err
 
         name_A, name_B = str(children[0]), str(children[1])
         s_A, c_A = parse_stv_param(children[2])
@@ -30,10 +25,7 @@ def make_op(metta_ref):
         graph = build_beta_chain(
             priors=[s_A, 0.5], confidences=[c_A, 0.01],
             strengths=[s_AB], impl_confidences=[c_AB], backgrounds=[bg])
-        samples = run_beta_sampling(graph, seed=42)
-        _, strength, confidence = estimate_beta_marginal(
-            samples, graph, graph["nodes"][1])
-
+        strength, confidence = sample_and_measure(graph, graph["nodes"][1])
         return [make_stv(strength, confidence)]
 
     return thrml_symmetric_mp

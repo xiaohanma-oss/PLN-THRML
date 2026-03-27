@@ -14,6 +14,7 @@ Knowledge is stored in the MeTTa space using upstream lib_pln.metta conventions:
 """
 
 from hyperon import E, S, ValueAtom
+from pln_thrml_beta import MAX_CONFIDENCE
 
 
 # ── Atom parsing helpers ──────────────────────────────────────────────────
@@ -23,20 +24,17 @@ def _float_from_atom(atom):
     return float(str(atom))
 
 
-def _parse_stv(stv_atom):
-    """Parse (stv s c) atom into (strength, confidence) tuple."""
-    children = stv_atom.get_children()
-    return _float_from_atom(children[1]), _float_from_atom(children[2])
-
-
 def parse_stv_param(atom):
-    """Parse (stv s c) atom passed as a grounded op parameter.
+    """Parse (stv s c) atom into (strength, confidence) tuple.
 
     Used by |-thrml rules that forward $T1/$T2 truth values from the
     inference chain into grounded operations (matching upstream lib_pln.metta).
+    Clamps strength to [0, 1] and confidence to [0, 1).
     """
     children = atom.get_children()
-    return _float_from_atom(children[1]), _float_from_atom(children[2])
+    s = max(0.0, min(1.0, _float_from_atom(children[1])))
+    c = max(0.0, min(MAX_CONFIDENCE, _float_from_atom(children[2])))
+    return s, c
 
 
 # ── Space queries ─────────────────────────────────────────────────────────
@@ -54,10 +52,10 @@ def extract_priors(metta):
         try:
             name_atom.get_children()
             continue  # It's an expression, not a plain symbol
-        except:
+        except Exception:
             pass
         name = str(name_atom)
-        s, c = _parse_stv(children[1])
+        s, c = parse_stv_param(children[1])
         priors[name] = {"strength": s, "confidence": c}
     return priors
 
@@ -119,6 +117,16 @@ def find_prior(priors, name, default_s=0.5, default_c=0.5):
     return p["strength"], p["confidence"]
 
 # ── Result constructors ──────────────────────────────────────────────────
+
+def validate_op_args(atoms, min_children, op_name, expected_format):
+    """验证 grounded op 参数并提取 children。成功返回 (children, None)，失败返回 (None, error_list)。"""
+    if len(atoms) < 1:
+        return None, [make_error(f"expected ({op_name} ({expected_format}))")]
+    children = atoms[0].get_children()
+    if len(children) < min_children:
+        return None, [make_error(f"expected ({expected_format})")]
+    return children, None
+
 
 def make_stv(strength, confidence):
     return E(S("stv"), ValueAtom(strength), ValueAtom(confidence))

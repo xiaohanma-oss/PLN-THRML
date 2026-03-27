@@ -8,9 +8,9 @@ from pln_thrml_beta import (
     DEFAULT_K, bin_centers, bin_width,
     stv_to_beta_params, posterior_to_stv, effective_k,
     beta_prior_weights, beta_implication_weights,
-    build_beta_chain, run_beta_sampling,
+    build_beta_chain, build_beta_full_graph, run_beta_sampling,
     estimate_beta_marginal, estimate_beta_conditional,
-    diagnose_convergence,
+    diagnose_convergence, sample_and_measure, _greedy_color,
 )
 from conftest import STRENGTH_TOL, CONFIDENCE_TOL, upstream_truth
 
@@ -456,18 +456,77 @@ class TestMultiPathConsistency:
         assert c_short > c_long, \
             f"Short chain confidence {c_short:.3f} should be > long chain {c_long:.3f}"
 
-    @pytest.mark.skip(reason="build_beta_full_graph single-node-per-block mixing too slow for K-bin diamond; needs graph coloring optimization")
     def test_diamond_stronger_than_single_chain(self):
         """Diamond graph (two paths) should give higher confidence on D
-        than a single chain A→B→D.
+        than a single chain A→B→D."""
+        # Diamond: A→B→D, A→C→D
+        diamond = build_beta_full_graph(
+            priors={"A": {"strength": 0.8, "confidence": 0.9},
+                    "B": {"strength": 0.5, "confidence": 0.01},
+                    "C": {"strength": 0.5, "confidence": 0.01},
+                    "D": {"strength": 0.5, "confidence": 0.01}},
+            implications=[
+                {"src": "A", "dst": "B", "strength": 0.7, "confidence": 0.9},
+                {"src": "B", "dst": "D", "strength": 0.7, "confidence": 0.9},
+                {"src": "A", "dst": "C", "strength": 0.7, "confidence": 0.9},
+                {"src": "C", "dst": "D", "strength": 0.7, "confidence": 0.9},
+            ],
+        )
+        diamond_samples = run_beta_sampling(diamond, seed=42)
+        _, _, c_diamond = estimate_beta_marginal(
+            diamond_samples, diamond, diamond["nodes"]["D"])
 
-        NOTE: Currently skipped because build_beta_full_graph uses
-        single-node-per-block strategy which has poor mixing for K-bin
-        nodes with multiple interacting factors. This is a known
-        limitation — fixing it requires implementing graph coloring
-        for the Beta full graph builder.
-        """
-        pass
+        # Single chain: A→B→D
+        chain = build_beta_chain(
+            priors=[0.8, 0.5, 0.5],
+            confidences=[0.9, 0.01, 0.01],
+            strengths=[0.7, 0.7],
+            impl_confidences=[0.9, 0.9],
+            backgrounds=[0.02, 0.02],
+        )
+        chain_samples = run_beta_sampling(chain, seed=42)
+        _, _, c_chain = estimate_beta_marginal(
+            chain_samples, chain, chain["nodes"][2])
+
+        assert c_diamond > c_chain, \
+            f"Diamond confidence {c_diamond:.3f} should be > single chain {c_chain:.3f}"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  Graph coloring
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestGreedyColor:
+    """Verify greedy graph coloring for block Gibbs assignment."""
+
+    def test_chain_gives_two_colors(self):
+        names = ["A", "B", "C", "D"]
+        adj = {"A": {"B"}, "B": {"A", "C"}, "C": {"B", "D"}, "D": {"C"}}
+        groups = _greedy_color(names, adj)
+        assert len(groups) == 2
+        for g in groups:
+            for i, a in enumerate(g):
+                for b in g[i + 1:]:
+                    assert b not in adj[a], f"{a} and {b} are adjacent but same color"
+
+    def test_diamond_gives_two_colors(self):
+        names = ["A", "B", "C", "D"]
+        adj = {"A": {"B", "C"}, "B": {"A", "D"}, "C": {"A", "D"}, "D": {"B", "C"}}
+        groups = _greedy_color(names, adj)
+        assert len(groups) == 2
+
+    def test_triangle_gives_three_colors(self):
+        names = ["A", "B", "C"]
+        adj = {"A": {"B", "C"}, "B": {"A", "C"}, "C": {"A", "B"}}
+        groups = _greedy_color(names, adj)
+        assert len(groups) == 3
+
+    def test_isolated_nodes_single_color(self):
+        names = ["A", "B", "C"]
+        adj = {"A": set(), "B": set(), "C": set()}
+        groups = _greedy_color(names, adj)
+        assert len(groups) == 1
+        assert sorted(groups[0]) == names
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -570,3 +629,62 @@ class TestConvergenceDiagnostics:
         assert "ess" in diag
         assert "converged" in diag
         assert isinstance(diag["converged"], bool)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  Edge cases: c2w / w2c
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestC2wW2cEdges:
+    def test_c2w_zero(self):
+        assert c2w(0.0) == 0.0
+
+    def test_c2w_one(self):
+        assert c2w(1.0) == float('inf')
+
+    def test_c2w_negative(self):
+        assert c2w(-0.1) == 0.0
+
+    def test_w2c_zero(self):
+        assert w2c(0.0) == 0.0
+
+    def test_w2c_negative(self):
+        assert w2c(-1.0) == 0.0
+
+    def test_roundtrip(self):
+        for c in [0.1, 0.5, 0.9, 0.99]:
+            assert w2c(c2w(c)) == pytest.approx(c, abs=1e-10)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  sample_and_measure helper
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestSampleAndMeasure:
+    def test_returns_strength_confidence(self):
+        graph = build_beta_chain(
+            priors=[0.8], confidences=[0.9],
+            strengths=[], impl_confidences=[], backgrounds=[])
+        s, c = sample_and_measure(graph, graph["nodes"][0])
+        assert 0.0 < s < 1.0
+        assert 0.0 <= c <= 1.0
+
+    def test_matches_manual_pipeline(self):
+        graph = build_beta_chain(
+            priors=[0.7, 0.5], confidences=[0.8, 0.01],
+            strengths=[0.9], impl_confidences=[0.85], backgrounds=[0.02])
+        s1, c1 = sample_and_measure(graph, graph["nodes"][1], seed=42)
+        samples = run_beta_sampling(graph, seed=42)
+        _, s2, c2 = estimate_beta_marginal(samples, graph, graph["nodes"][1])
+        assert s1 == pytest.approx(s2, abs=1e-10)
+        assert c1 == pytest.approx(c2, abs=1e-10)
+
+    def test_different_seeds_vary(self):
+        graph = build_beta_chain(
+            priors=[0.6, 0.5], confidences=[0.8, 0.01],
+            strengths=[0.85], impl_confidences=[0.8], backgrounds=[0.02])
+        s1, _ = sample_and_measure(graph, graph["nodes"][1], seed=1)
+        s2, _ = sample_and_measure(graph, graph["nodes"][1], seed=999)
+        # Different seeds should give slightly different results
+        # (not exactly equal, though both should be close)
+        assert not (s1 == pytest.approx(s2, abs=1e-10))
