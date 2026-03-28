@@ -10,7 +10,7 @@ from pln_thrml_beta import (
     beta_prior_weights, beta_implication_weights,
     build_beta_chain, build_beta_full_graph, run_beta_sampling,
     estimate_beta_marginal, estimate_beta_conditional,
-    diagnose_convergence, sample_and_measure, _greedy_color,
+    diagnose_convergence, sample_and_measure,
 )
 from conftest import STRENGTH_TOL, CONFIDENCE_TOL, upstream_truth
 
@@ -490,43 +490,6 @@ class TestMultiPathConsistency:
 
         assert c_diamond > c_chain, \
             f"Diamond confidence {c_diamond:.3f} should be > single chain {c_chain:.3f}"
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-#  Graph coloring
-# ═══════════════════════════════════════════════════════════════════════════
-
-class TestGreedyColor:
-    """Verify greedy graph coloring for block Gibbs assignment."""
-
-    def test_chain_gives_two_colors(self):
-        names = ["A", "B", "C", "D"]
-        adj = {"A": {"B"}, "B": {"A", "C"}, "C": {"B", "D"}, "D": {"C"}}
-        groups = _greedy_color(names, adj)
-        assert len(groups) == 2
-        for g in groups:
-            for i, a in enumerate(g):
-                for b in g[i + 1:]:
-                    assert b not in adj[a], f"{a} and {b} are adjacent but same color"
-
-    def test_diamond_gives_two_colors(self):
-        names = ["A", "B", "C", "D"]
-        adj = {"A": {"B", "C"}, "B": {"A", "D"}, "C": {"A", "D"}, "D": {"B", "C"}}
-        groups = _greedy_color(names, adj)
-        assert len(groups) == 2
-
-    def test_triangle_gives_three_colors(self):
-        names = ["A", "B", "C"]
-        adj = {"A": {"B", "C"}, "B": {"A", "C"}, "C": {"A", "B"}}
-        groups = _greedy_color(names, adj)
-        assert len(groups) == 3
-
-    def test_isolated_nodes_single_color(self):
-        names = ["A", "B", "C"]
-        adj = {"A": set(), "B": set(), "C": set()}
-        groups = _greedy_color(names, adj)
-        assert len(groups) == 1
-        assert sorted(groups[0]) == names
 
 
 # ═══════════════════════════════════════════════════════════════════════════

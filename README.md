@@ -138,20 +138,31 @@ Full per-rule tables and divergence analysis: [docs/results.md](docs/results.md)
 
 ## What this means for Hyperon
 
-1. **Direct compilation path**: MeTTa PLN rules can be compiled to thrml
+1. **Complete Q_tv on THRML**: The Hyperon whitepaper (2025) defines PLN
+   inference as message-passing on a product quantale Q_logic × Q_tv.
+   This project demonstrates that the entire Q_tv component — both the
+   quantale product ⊗ (evidence combination at factors) and the quantale
+   sum ⊕ (marginalization at variables) — can be compiled to thrml factor
+   graphs via `W = log P` and executed through Gibbs sampling.  All 11 PLN
+   rules verified end-to-end across multiple parameter sets constitute the
+   evidence.  Q_logic (rule selection, structure discovery) remains with
+   CPU/GPU; all truth-value computation has a complete path to
+   thermodynamic hardware.
+
+2. **Direct compilation path**: MeTTa PLN rules can be compiled to thrml
    factor graphs via the `W = log P` transform, then executed on Extropic's
    TSU.  No approximation is introduced — the factor graph encodes the
    exact same joint distribution that PLN reasons over.
 
-2. **Automatic inversion**: The factor graph encodes the joint P(A,B),
+3. **Automatic inversion**: The factor graph encodes the joint P(A,B),
    so Gibbs sampling recovers *both* P(B|A) and P(A|B) without separate
    inversion rules.  Hardware naturally performs Bayes' rule.
 
-3. **Composability**: Rules combine by adding factors to the graph.
+4. **Composability**: Rules combine by adding factors to the graph.
    Deduction chains, V-shapes, and collider topologies all work with the
    same compilation transform.
 
-4. **Scaling**: Block Gibbs with graph coloring enables parallel updates.
+5. **Scaling**: Block Gibbs with graph coloring enables parallel updates.
    A 20-node deduction chain runs in 1.5s on CPU; a 50-node chain
    completes within 60s.  On a TSU, thermal equilibration would be
    near-instantaneous.  Verified by scalability tests (`pytest -m slow`)
@@ -170,7 +181,6 @@ metta/                     MeTTa integration layer (optional, requires hyperon)
     rules.py               9 sampling-based rules (declarative table + generic factory)
     revision.py            Revision rule (dual calling convention)
     negation.py            Negation rule (analytical, no sampling)
-    compile.py             Full-graph compile/query
   declarations/
     pln_types.metta        Type declarations (stv, Implication, Similarity, etc.)
 tests/
@@ -181,11 +191,11 @@ docs/
   results.md               Full per-rule results tables
   pln-formulas.md          PLN truth-value confidence formulas
   beta-discretization.md   Beta-discretized approach details
-  hardware-constraints.md  TSU hardware mapping constraints
 ```
 
 ## Not yet covered
 
+- **Cyclic inference**: Loopy graphs (A→B→C→A) — highest-leverage extension
 - **EvidenceID / StampDisjoint**: Evidence tracking to prevent double-counting
   during revision (PLN uses `StampDisjoint` and `StampConcat`).
 - **PLN.Derive**: Priority-queue based iterative inference engine with
@@ -217,10 +227,13 @@ pytest tests/ -v
 4. TrueAGI. *PLN Experimental (mathematical foundations)*.
    https://github.com/trueagi-io/pln-experimental
 
-5. Jelincic, Lockwood, Garlapati, Schillinger, Chuang, Verdon, McCourt.
+5. Goertzel, B. *Hyperon for AGI ⇒ ASI, Whitepaper 2025 (Deepish-Dive Version)*.
+   October 15, 2025.
+
+6. Jelincic, Lockwood, Garlapati, Schillinger, Chuang, Verdon, McCourt.
    *An efficient probabilistic hardware architecture for diffusion-like models*.
    arXiv:2510.23972, 2025.
 
 ## License
 
-[MIT](LICENSE) — Copyright (c) 2026 Xiaohan Ma
+[MIT](LICENSE) — Copyright (c) 2025 Xiaohan Ma

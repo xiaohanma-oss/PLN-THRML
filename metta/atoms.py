@@ -1,16 +1,8 @@
 """
-atoms.py — Extract PLN knowledge from MeTTa space (upstream Atomese style)
-===========================================================================
+atoms.py — MeTTa atom parsing and construction helpers for PLN grounded ops.
 
-Knowledge is stored in the MeTTa space using upstream lib_pln.metta conventions:
-
-    Node priors:      (A (stv 0.8 0.9))
-    Implications:     ((Implication A B) (stv 0.9 0.85))
-    Inheritance:      ((Inheritance A B) (stv 0.9 0.85))
-    Similarity:       ((Similarity A B) (stv 0.85 0.9))
-    Equivalence:      ((Equivalence A B) (stv 0.8 0.9))
-    Evaluations:      ((Evaluation P A) (stv 0.8 0.9))
-    Backgrounds:      ((Background A B) 0.05)
+Provides: stv parsing, background extraction, argument validation,
+and atom constructors (make_stv, make_error).
 """
 
 from hyperon import E, S, ValueAtom
@@ -36,73 +28,6 @@ def parse_stv_param(atom):
     c = max(0.0, min(MAX_CONFIDENCE, _float_from_atom(children[2])))
     return s, c
 
-
-
-def extract_priors(metta):
-    """Query space for node priors: (name (stv s c)).
-
-    Returns dict: {name: {"strength": s, "confidence": c}}
-    """
-    results = metta.run("!(match &self ($x (stv $s $c)) ($x (stv $s $c)))")
-    priors = {}
-    for atom in results[0]:
-        children = atom.get_children()
-        name_atom = children[0]
-        try:
-            name_atom.get_children()
-            continue  # It's an expression, not a plain symbol
-        except Exception:
-            pass
-        name = str(name_atom)
-        s, c = parse_stv_param(children[1])
-        priors[name] = {"strength": s, "confidence": c}
-    return priors
-
-
-def extract_links(metta, link_type):
-    """Query space for link atoms: ((LinkType src dst) (stv s c)).
-
-    Returns list of dicts: [{src, dst, strength, confidence}]
-    """
-    query = f"!(match &self (({link_type} $x $y) (stv $s $c)) (({link_type} $x $y) (stv $s $c)))"
-    results = metta.run(query)
-    links = []
-    for atom in results[0]:
-        children = atom.get_children()
-        link_atom = children[0]
-        link_children = link_atom.get_children()
-        links.append({
-            "src": str(link_children[1]),
-            "dst": str(link_children[2]),
-            "strength": _float_from_atom(children[1].get_children()[1]),
-            "confidence": _float_from_atom(children[1].get_children()[2]),
-        })
-    return links
-
-
-
-def extract_negated_implications(metta):
-    """Query space for ((Implication src (Not dst)) (stv s c)).
-
-    Returns list of dicts: [{src, dst, strength, confidence}]
-    where dst is the inner atom (without Not wrapper).
-    """
-    query = "!(match &self ((Implication $x (Not $y)) (stv $s $c)) ((Implication $x (Not $y)) (stv $s $c)))"
-    results = metta.run(query)
-    links = []
-    for atom in results[0]:
-        children = atom.get_children()
-        link_atom = children[0]
-        link_children = link_atom.get_children()
-        # link_children[2] is (Not $y), extract inner
-        not_children = link_children[2].get_children()
-        links.append({
-            "src": str(link_children[1]),
-            "dst": str(not_children[1]),
-            "strength": _float_from_atom(children[1].get_children()[1]),
-            "confidence": _float_from_atom(children[1].get_children()[2]),
-        })
-    return links
 
 
 def extract_backgrounds(metta):

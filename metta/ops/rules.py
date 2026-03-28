@@ -9,9 +9,13 @@ The generic factory `make_rule_op` wraps each into a grounded MeTTa operation.
 from pln_thrml_beta import (
     build_beta_chain, build_beta_v_graph, build_beta_inv_v_graph,
     build_beta_symmetric_chain, sample_and_measure, DEFAULT_EPSILON,
+    _assemble_free_graph, make_beta_prior_factor, DEFAULT_K,
 )
+from thrml.pgm import CategoricalNode
+from thrml.block_management import Block
 from metta.atoms import (
-    extract_backgrounds, parse_stv_param, make_stv, validate_op_args,
+    extract_backgrounds, parse_stv_param, make_stv, make_error,
+    validate_op_args,
 )
 
 
@@ -133,6 +137,11 @@ def _build_symmetric_mp(children, metta_ref):
     return sample_and_measure(graph, graph["nodes"][1])
 
 
+def _build_negation(children, metta_ref):
+    s, c = parse_stv_param(children[1])
+    return (1.0 - s, c)
+
+
 # ── Rule table ───────────────────────────────────────────────────────────
 
 RULE_SPECS = {
@@ -145,6 +154,7 @@ RULE_SPECS = {
     "thrml-transitive-sim!": (5, "A B C (stv ..) (stv ..)", _build_transitive_sim),
     "thrml-eval-impl!":      (5, "A B C (stv ..) (stv ..)", _build_eval_impl),
     "thrml-symmetric-mp!":   (4, "A B (stv ..) (stv ..)", _build_symmetric_mp),
+    "thrml-negation!":       (2, "A (stv ..)", _build_negation),
 }
 
 
@@ -160,3 +170,54 @@ def make_rule_op(name, metta_ref):
         return [make_stv(strength, confidence)]
 
     return op
+
+
+# ── Revision (dual calling convention — not in RULE_SPECS) ──────────────
+
+
+def _build_beta_revision_graph(s1, c1, s2, c2, k=DEFAULT_K):
+    node = CategoricalNode()
+    factors = [
+        make_beta_prior_factor(node, s1, c1, k),
+        make_beta_prior_factor(node, s2, c2, k),
+    ]
+    return _assemble_free_graph([node], factors, [Block([node])], k)
+
+
+def make_revision_op(metta_ref):
+    """Create thrml-revision! operation (dual calling convention)."""
+
+    def thrml_revision(*atoms):
+        if len(atoms) < 1:
+            return [make_error("expected (thrml-revision! (A s1 c1 s2 c2)) or (thrml-revision! (T (stv s1 c1) (stv s2 c2)))")]
+
+        children = atoms[0].get_children()
+
+        # Support two calling conventions:
+        # 1. |-thrml rule: (term (stv s1 c1) (stv s2 c2)) — 3 children
+        # 2. Direct call: (name s1 c1 s2 c2) — 5 children
+        is_stv_format = False
+        if len(children) >= 3:
+            try:
+                sub = children[1].get_children()
+                if str(sub[0]) == "stv":
+                    is_stv_format = True
+            except Exception:
+                pass
+
+        if is_stv_format:
+            s1, c1 = parse_stv_param(children[1])
+            s2, c2 = parse_stv_param(children[2])
+        elif len(children) >= 5:
+            s1 = float(str(children[1]))
+            c1 = float(str(children[2]))
+            s2 = float(str(children[3]))
+            c2 = float(str(children[4]))
+        else:
+            return [make_error("expected (thrml-revision! (A s1 c1 s2 c2)) or (thrml-revision! (T (stv s1 c1) (stv s2 c2)))")]
+
+        graph = _build_beta_revision_graph(s1, c1, s2, c2)
+        strength, confidence = sample_and_measure(graph, graph["nodes"][0])
+        return [make_stv(strength, confidence)]
+
+    return thrml_revision
