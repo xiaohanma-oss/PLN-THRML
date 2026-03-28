@@ -1,19 +1,47 @@
-# PLN-THRML: Probabilistic Logic Networks on Thermodynamic Sampling Unit
+# PLN-THRML
 
-## The idea in 30 seconds
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
+[![Version 0.2.0](https://img.shields.io/badge/version-0.2.0-green.svg)](pyproject.toml)
+
+> Compile PLN inference rules to thermodynamic factor graphs and run them
+> via Gibbs sampling — bridging [Hyperon/PLN](https://github.com/trueagi-io/PLN)
+> and [Extropic/thrml](https://github.com/extropic-ai/thrml).
+
+## Table of Contents
+
+- [Overview](#overview)
+- [How it works](#how-it-works)
+- [Architecture mapping](#architecture-mapping)
+- [Installation](#installation)
+- [Quick start](#quick-start)
+- [Results](#results)
+- [What this means for Hyperon](#what-this-means-for-hyperon)
+- [Project structure](#project-structure)
+- [Not yet covered](#not-yet-covered)
+- [Contributing](#contributing)
+- [References](#references)
+
+## Overview
 
 PLN treats inference as probability propagation; the Thermodynamic Sampling
 Unit (TSU) treats computation as energy minimisation.  The transform
 `W = log P(child|parent)` bridges the two: every PLN conditional probability
-table compiles directly into a Boltzmann energy table.  Thermal fluctuations
-in the hardware perform inference: the equilibrium distribution over p-bit
-states **is** the PLN truth value.
+table compiles directly into a Boltzmann energy table.
 
-This repo demonstrates the compilation for PLN inference rules and verifies
-each by comparing Gibbs-sampled conditionals against PLN's analytical
-formulas.  Together, this validates that PLN inference rules compile
-faithfully to undirected factor graphs and produce results consistent
-with PLN's analytical formulas under Gibbs sampling.
+The question is whether this compilation preserves PLN's semantics — not just
+strength, but also confidence.  This repo validates that it does: all 11 PLN
+inference rules are compiled via Beta discretization and verified against
+PLN's analytical formulas.
+
+## How it works
+
+1. **Parameterize** — PLN `(stv s c)` → Beta(α, β) with mean = s
+2. **Build graph** — `W = log P`: each node becomes a K=16 bin `CategoricalNode`; each implication becomes a K×K energy factor
+3. **Sample** — Block Gibbs sampling (50 batches × 2,000 samples)
+4. **Recover** — moment-match the posterior histogram → `(strength, confidence)`
+
+See [docs/beta-discretization.md](docs/beta-discretization.md) for details.
 
 ## Architecture mapping
 
@@ -28,11 +56,44 @@ with PLN's analytical formulas under Gibbs sampling.
 | Induction (V-shape) | Star factor graph | Hub-and-spoke topology |
 | Abduction (inverted-V) | Collider factor graph | Explaining-away circuit |
 
-## Quick start
+## Installation
+
+**From PyPI:**
 
 ```bash
-pip install thrml hyperon                  # or: pip install pln-thrml[metta]
+pip install pln-thrml                     # core only (thrml + jax)
+pip install pln-thrml[metta]              # + MeTTa bridge (requires hyperon)
 ```
+
+**From source:**
+
+```bash
+git clone https://github.com/mafeifei666666/PLN-THRML.git
+cd PLN-THRML
+pip install -e .                          # editable install
+```
+
+> To run tests, also fetch the [trueagi-io/PLN](https://github.com/trueagi-io/PLN)
+> test baselines: `git submodule update --init && pip install -e ".[dev]"`
+
+## Quick start
+
+### Python API (no MeTTa dependency)
+
+```python
+from pln_thrml_beta import build_beta_chain, sample_and_measure
+
+# Modus ponens: A → B, P(A)=0.8, s(A→B)=0.9
+graph = build_beta_chain(
+    priors=[0.8, 0.5], confidences=[0.9, 0.01],
+    strengths=[0.9], impl_confidences=[0.85],
+    backgrounds=[0.02],
+)
+s, c = sample_and_measure(graph, target_node=graph["nodes"][1])
+print(f"P(B) = (stv {s:.4f} {c:.4f})")   # ≈ (stv 0.73 0.76)
+```
+
+### MeTTa bridge (requires `hyperon`)
 
 ```python
 from hyperon import MeTTa
@@ -44,106 +105,36 @@ register_all(metta)
 results = metta.run('''
     (A (stv 0.8 0.9))
     ((Implication A B) (stv 0.9 0.85))
-    !(thrml-modus-ponens! (A B))
+    !(thrml-modus-ponens! (A B (stv 0.8 0.9) (stv 0.9 0.85)))
 ''')
 # => (stv 0.7242 0.5508)
 ```
 
-**Run tests:**
+### Run tests
 
 ```bash
-pytest tests/ -v                           # 88 tests, all rules covered
+pytest tests/ -v                          # all 11 rules covered
+pytest -m slow -v                        # scalability tests (trueagi-io/PLN examples)
 ```
 
 ## Results
 
-All 11 PLN rules are compiled to beta-discretized thrml factor graphs
-(K=16 bins) and verified against analytical formulas.  Both strength and
-confidence emerge from the posterior distribution.  Sampling: 50 batches ×
-2,000 samples (100,000 total), 500 warmup steps.  Regenerate with
-`pytest tests/ -v`.
+All 11 PLN rules compiled and verified.  Summary of maximum strength errors:
 
-### Modus Ponens — `A, A→B ⊢ B`
+| Rule | Max Error | Rule | Max Error |
+|------|-----------|------|-----------|
+| Modus Ponens | 0.044 | Negation | 0.000 |
+| Deduction | 0.073 | Revision | 0.015 |
+| Inversion | 0.038 | Sym. Modus Ponens | 0.005 |
+| Induction | 0.046 | Equiv→Impl | 0.025 |
+| Abduction | 0.130 | Trans. Similarity | 0.050 |
+| Eval. Implication | 0.061 | | |
 
-| Setting | PLN | Beta Gibbs | Error |
-|---|---|---|---|
-| Strong prior (s_A=0.8, s_AB=0.9) | 0.7240 | 0.7317 | 0.0077 |
-| Smokes upstream (s_A=1.0, s_AB=0.6) | 0.6000 | 0.5662 | 0.0338 |
-| Rare antecedent (s_A=0.1, s_AB=0.8) | 0.0980 | 0.1417 | 0.0437 |
+Most rules match within 5%.  Abduction/Induction diverge because PLN uses
+closed-form approximations while the factor graph computes the exact joint
+posterior.  Inversion gives exact Bayesian P(A|B) vs PLN's heuristic.
 
-### Deduction — `A→B, B→C ⊢ A→C`
-
-| Setting | PLN | Beta Gibbs | Error |
-|---|---|---|---|
-| Standard chain (s_AB=0.8, s_BC=0.9) | 0.7333 | 0.8064 | 0.0731 |
-
-### Inversion — `A→B ⊢ B→A` (exact Bayes)
-
-| Setting | Bayes | Beta Gibbs | Error |
-|---|---|---|---|
-| Upstream (s_A=0.5, s_AB=0.87) | 0.9775 | 0.9391 | 0.0384 |
-
-### Induction — `C→A, C→B ⊢ A→B`
-
-| Setting | PLN | Beta Gibbs | Error |
-|---|---|---|---|
-| Raven upstream (s_CA=0.9, s_CB=0.8) | 0.7267 | 0.7731 | 0.0464 |
-
-### Abduction — `A→C, B→C ⊢ A→B`
-
-| Setting | PLN | Beta Gibbs | Error |
-|---|---|---|---|
-| Symmetric priors (s_AC=0.8, s_BC=0.7) | 0.6200 | 0.7496 | 0.1296 |
-
-### Negation — `A ⊢ ¬A`
-
-| Setting | PLN | Beta Gibbs | Error |
-|---|---|---|---|
-| Strong (s=0.99) | 0.0100 | 0.0100 | 0.0000 |
-
-### Revision — combine evidence
-
-| Setting | PLN | Beta Gibbs | Error |
-|---|---|---|---|
-| Dual sources (s1=0.8,c1=0.9 + s2=0.3,c2=0.7) | 0.6971 | 0.6819 | 0.0151 |
-
-### Symmetric Modus Ponens — `A, A~B ⊢ B`
-
-| Setting | PLN | Beta Gibbs | Error |
-|---|---|---|---|
-| Standard (s_A=0.8, s_AB=0.85) | 0.7540 | 0.7587 | 0.0047 |
-
-### Equivalence→Implication — `A≡B ⊢ A→B`
-
-| Setting | PLN | Beta Gibbs | Error |
-|---|---|---|---|
-| Upstream (s_AB=0.98) | 0.9899 | 0.9649 | 0.0250 |
-
-### Transitive Similarity — `A~B, B~C ⊢ A~C`
-
-| Setting | PLN | Beta Gibbs | Error |
-|---|---|---|---|
-| Upstream (s_AB=1.0, s_BC=1.0) | 1.0000 | 0.9501 | 0.0499 |
-
-### Evaluation Implication — `(Eval A B), (Impl A C) ⊢ (Eval C B)`
-
-| Setting | PLN | Beta Gibbs | Error |
-|---|---|---|---|
-| Upstream (s_AB=1.0, s_AC=1.0) | 1.0000 | 0.9389 | 0.0611 |
-
-**Notes on divergence:**  For most rules, the factor graph's sampled
-strength closely matches PLN's analytical formula (<2%).  Three cases
-diverge by design:
-
-- **Inversion**: The factor graph gives the exact Bayesian P(A|B), while
-  PLN uses a heuristic (strength unchanged, confidence penalized).  The
-  table above compares Gibbs against exact Bayes — not PLN's heuristic.
-- **Abduction / Induction**: PLN's strength formulas are closed-form
-  approximations; the factor graph computes the exact joint posterior.
-  The golden tests (`test_golden.py`) verify confidence only for these rules.
-- **Revision**: PLN uses arithmetic weighted average; Boltzmann energy
-  addition gives geometric combination.
-
+Full per-rule tables and divergence analysis: [docs/results.md](docs/results.md)
 
 ## What this means for Hyperon
 
@@ -161,157 +152,56 @@ diverge by design:
    same compilation transform.
 
 4. **Scaling**: Block Gibbs with graph coloring enables parallel updates.
-   A 20-node deduction chain runs in 1.5s on CPU; on a TSU, thermal
-   equilibration would be near-instantaneous.
+   A 20-node deduction chain runs in 1.5s on CPU; a 50-node chain
+   completes within 60s.  On a TSU, thermal equilibration would be
+   near-instantaneous.  Verified by scalability tests (`pytest -m slow`)
+   covering [trueagi-io/PLN](https://github.com/trueagi-io/PLN) examples — DeductionRevision (diamond DAG),
+   FlyingRaven (conflicting paths with negation), Smokes (social network
+   propagation), and RavenInduction (instance-to-class generalization).
 
-## Integration feasibility (hyperon spike)
-
-A separate spike ([hyperon-thrml](https://github.com/mafeifei666666/hyperon-thrml))
-validated that hyperon's Python API is mature enough to bridge MeTTa ↔ thrml.
-Key findings:
-
-- **Hyperon API**: `MeTTa()` runner, pattern matching, `OperationAtom`
-  grounded operations, atom construction/deconstruction — all work.
-  Missing: `Atom.parse()`, documented GroundingSpace backend API.
-- **Recommended path**: Register grounded operations (`thrml-modus-ponens!`,
-  etc.) that query the MeTTa space, build thrml graphs, sample, and return
-  results.  This is what `metta/ops/` implements.
-
-Bridge PoC results (modus ponens, all <0.5% error):
-
-| s_A | s_AB | PLN | thrml | Error |
-|-----|------|-----|-------|-------|
-| 0.8 | 0.9 | 0.7240 | 0.7242 | 0.02% |
-| 0.5 | 0.95 | 0.4850 | 0.4807 | 0.43% |
-| 0.1 | 0.8 | 0.0980 | 0.0955 | 0.25% |
-
-## Beta-discretized factor graphs (primary approach)
-
-All inference in this repo uses beta-discretized factor graphs.
-Each proposition's strength is modeled as a K-bin discrete random variable
-over [0,1] (default K=16).  After Gibbs sampling, **both** strength and
-confidence emerge from the posterior distribution — no analytical confidence
-formula needed.
-
-- **Parameterization**: Given PLN `(stv s c)`, derive Beta(α, β) where
-  `n = c/(1-c) + 2`, `α = s·n`, `β = (1-s)·n`.  This guarantees the Beta
-  mean equals `s` for any confidence level.
-- **Recovery**: Fit the sampled posterior histogram back to Beta via
-  moment-matching → recover `(strength, confidence)`.
-- **Conditional queries**: Condition node gets a strong "True" prior
-  (0.99, 0.99); target node's marginal gives the conditional probability.
-
-Multi-bit encoding of propositions maps naturally to the K-bin
-discretization, giving richer posterior information than binary nodes.
-
-## File overview
+## Project structure
 
 ```
-pln_thrml_beta.py                Primary: beta factor graph builders, sampling, posterior → stv
-                                 Also contains PLN utilities: c2w/w2c, EPS, DEFAULT_EPSILON
-vendor/PLN/                      Upstream trueagi-io/PLN (git submodule) — test baselines
-metta/                           MeTTa integration layer (optional, requires hyperon)
-  atoms.py                       Atom extraction from MeTTa space
-  ops/                           11 grounded operations + full-graph compile/query
+pln_thrml_beta.py          Beta factor graph engine (builds, samples, recovers stv)
+vendor/PLN/                trueagi-io/PLN (git submodule) — test baselines
+metta/                     MeTTa integration layer (optional, requires hyperon)
+  atoms.py                 Atom extraction from MeTTa space
+  ops/
+    rules.py               9 sampling-based rules (declarative table + generic factory)
+    revision.py            Revision rule (dual calling convention)
+    negation.py            Negation rule (analytical, no sampling)
+    compile.py             Full-graph compile/query
   declarations/
-    pln_types.metta              Type declarations (stv, Implication, Similarity, etc.)
+    pln_types.metta        Type declarations (stv, Implication, Similarity, etc.)
 tests/
-  test_golden.py                 All rules verified through MeTTa end-to-end
-  test_beta.py                   Beta-discretized approach tests
-pyproject.toml                   Package metadata and dependencies
+  test_golden.py           All rules verified end-to-end via MeTTa
+  test_beta.py             Beta engine unit tests
+  test_scale.py            Scalability tests from trueagi-io/PLN examples (pytest -m slow)
+docs/
+  results.md               Full per-rule results tables
+  pln-formulas.md          PLN truth-value confidence formulas
+  beta-discretization.md   Beta-discretized approach details
+  hardware-constraints.md  TSU hardware mapping constraints
 ```
-
-## MeTTa integration
-
-The `metta/` package provides a thin layer that bridges MeTTa PLN atoms
-to the thrml factor graph engine via grounded operations.  Knowledge is
-expressed using upstream [lib_pln.metta](https://github.com/trueagi-io/PLN/blob/main/lib_pln.metta)
-conventions:
-
-```metta
-(A (stv 0.8 0.9))                         ; node prior
-((Implication A B) (stv 0.9 0.85))        ; directed link
-((Similarity A B) (stv 0.85 0.9))         ; symmetric link
-!(thrml-modus-ponens! (A B (stv 0.8 0.9) (stv 0.9 0.85)))
-```
-
-Available grounded operations: `thrml-modus-ponens!`, `thrml-deduction!`,
-`thrml-inversion!`, `thrml-induction!`, `thrml-abduction!`, `thrml-revision!`,
-`thrml-negation!`, `thrml-symmetric-mp!`, `thrml-equiv-to-impl!`,
-`thrml-transitive-sim!`, `thrml-eval-impl!`.
-
-Each operation builds the appropriate thrml factor graph, runs Gibbs sampling,
-and returns results as `(stv strength confidence)`.
-
-Additionally, `thrml-compile!` / `thrml-query!` compile the entire knowledge
-base into a single factor graph with graph-coloring-based parallel Block
-Gibbs sampling — the path toward TSU hardware execution.
-
-## PLN truth-value formulas (trueagi-io/PLN)
-
-PLN truth functions are defined in upstream `lib_pln.metta` (included as a
-git submodule at `vendor/PLN/`).  Tests in `test_golden.py` call these
-upstream functions directly as baselines:
-
-| Rule | Confidence formula |
-|---|---|
-| Deduction | `s_AB · s_BC · c_AB · c_BC` |
-| Modus Ponens | `s_A · s_AB · c_A · c_AB` |
-| Inversion | `c_B · c_AB · 0.6` (heuristic) |
-| Induction | `w2c(s_CB · c_CB · c_CA)` |
-| Abduction | `w2c(s_AB · c_AB · c_CB)` |
-| Revision | `min(1.0, max(w2c(w1+w2), c1, c2))` |
-| Negation | `c` (unchanged) |
-| Symmetric Modus Ponens | `c_A · c_AB · truth_or(s_A, s_AB)` |
-| Equivalence→Implication | `c_AB` (unchanged) |
-| Transitive Similarity | `c_AB · c_BC · truth_or(s_AB, s_BC)` |
-| Evaluation Implication | `s_AB · s_AC · c_AB · c_AC` |
-
-Where `c2w(c) = c/(1-c)` and `w2c(w) = w/(w+1)`.
-
-**Modus Ponens strength formula** includes a background (leak) term:
-`s_B = s_A · s_AB + 0.02 · (1 − s_A)`.  Even when A is false, B can still
-be true with probability ε = 0.02.  The result tables above reflect this
-complete formula (see `Truth_ModusPonens` in upstream `lib_pln.metta`).
-
-**Key findings:**
-- **Inversion**: Production PLN uses a heuristic (strength unchanged,
-  confidence penalized), while the factor graph gives the exact Bayesian
-  answer.
-- **Revision**: PLN uses arithmetic weighted average; Boltzmann energy
-  addition gives geometric combination.
-
-## Hardware constraints (TSU)
-
-The Thermodynamic Sampling Unit (arXiv:2510.23972) imposes hard constraints
-that affect how PLN graphs map to silicon:
-
-- **Sparse connectivity (~12 neighbors per variable)**: Each p-bit couples
-  to roughly 12 others.  If a PLN node participates in more than 12
-  implication relationships, the subgraph cannot be mapped directly to a
-  single TSU tile and must be partitioned or virtualized.
-
-- **Ising (binary) variables**: The TSU natively supports two-state p-bits.
-  PLN truth values live in [0, 1], so encoding a continuous strength
-  requires multi-bit thermometer or binary encoding — each logical
-  proposition then occupies several physical p-bits.
-
-These constraints do not affect the correctness of the factor-graph
-compilation demonstrated here (which runs on CPU via `thrml`), but they
-are load-bearing for any physical deployment.
 
 ## Not yet covered
 
 - **EvidenceID / StampDisjoint**: Evidence tracking to prevent double-counting
-  during revision (upstream uses `StampDisjoint` and `StampConcat`).
-
+  during revision (PLN uses `StampDisjoint` and `StampConcat`).
 - **PLN.Derive**: Priority-queue based iterative inference engine with
-  bounded belief buffer (upstream: `PLN.Derive`).
-
+  bounded belief buffer.
 - **ECAN attention**: Attention allocation for prioritizing which
   subgraphs to sample first.
+- **Continuous-valued nodes**: Extending beyond discrete propositions.
 
-- **Continuous-valued nodes**: Extending beyond binary propositions.
+## Contributing
+
+```bash
+git clone --recurse-submodules https://github.com/mafeifei666666/PLN-THRML.git
+cd PLN-THRML
+pip install -e ".[dev]"
+pytest tests/ -v
+```
 
 ## References
 
@@ -327,7 +217,10 @@ are load-bearing for any physical deployment.
 4. TrueAGI. *PLN Experimental (mathematical foundations)*.
    https://github.com/trueagi-io/pln-experimental
 
-5. Jelinčič, Lockwood, Garlapati, Schillinger, Chuang, Verdon, McCourt.
+5. Jelincic, Lockwood, Garlapati, Schillinger, Chuang, Verdon, McCourt.
    *An efficient probabilistic hardware architecture for diffusion-like models*.
    arXiv:2510.23972, 2025.
 
+## License
+
+[MIT](LICENSE) — Copyright (c) 2026 Xiaohan Ma

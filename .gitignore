@@ -9,6 +9,7 @@ build/
 CLAUDE.md
 .venv/
 docs/internal/
+docs/references/
 .DS_Store
 .history/
 .vscode/

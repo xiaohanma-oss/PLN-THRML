@@ -23,7 +23,7 @@ from thrml.pgm import CategoricalNode
 from thrml.models.discrete_ebm import CategoricalEBMFactor, CategoricalGibbsConditional
 from thrml.factor import FactorSamplingProgram
 
-# ── PLN truth-value utilities ────────────────────
+
 EPS = 1e-7          # clamp for log-safety
 DEFAULT_EPSILON = 0.02  # PLN modus-ponens background rate
 
@@ -43,7 +43,7 @@ def w2c(w):
         return 0.0
     return w / (w + 1.0)
 
-# ── constants ────────────────────────────────────────────────────────────
+
 DEFAULT_K = 16
 
 DEFAULT_BETA_N_BATCHES = 50
@@ -135,7 +135,7 @@ def effective_k(confidence):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  Weight computation (pure JAX, no thrml dependency)
+#  Weight computation
 # ═══════════════════════════════════════════════════════════════════════════
 
 def beta_prior_weights(strength, confidence, k=DEFAULT_K):
@@ -241,30 +241,16 @@ def build_beta_chain(priors, confidences, strengths, impl_confidences,
                       backgrounds, k=DEFAULT_K, clamp_root=True):
     """Build a directed chain X_0 → X_1 → ... → X_{n-1} with K-bin nodes.
 
-    Parameters
-    ----------
-    priors : list[float]            strength of each node's prior
-    confidences : list[float]       confidence of each node's prior
-    strengths : list[float]         implication strength for each edge
-    impl_confidences : list[float]  implication confidence for each edge
-    backgrounds : list[float]       background rate for each edge
-    clamp_root : bool               If True, clamp root to its prior (good for
-                                    marginal queries).  If False, all nodes are
-                                    free (needed for conditional queries).
+    clamp_root=True: root sampled from its prior, rest are free (marginal queries).
+    clamp_root=False: all nodes free (conditional queries).
     """
     n = len(priors)
     nodes = [CategoricalNode() for _ in range(n)]
 
-    factors = []
-
-    if clamp_root:
-        # Prior factors for non-root nodes only (root is clamped)
-        for i in range(1, n):
-            factors.append(make_beta_prior_factor(nodes[i], priors[i], confidences[i], k))
-    else:
-        # All nodes get priors
-        for i in range(n):
-            factors.append(make_beta_prior_factor(nodes[i], priors[i], confidences[i], k))
+    # Prior factors: skip root when clamped
+    start = 1 if clamp_root else 0
+    factors = [make_beta_prior_factor(nodes[i], priors[i], confidences[i], k)
+               for i in range(start, n)]
 
     # Implication factors for each edge
     for i in range(n - 1):
@@ -272,45 +258,53 @@ def build_beta_chain(priors, confidences, strengths, impl_confidences,
             nodes[i], nodes[i + 1],
             strengths[i], impl_confidences[i], backgrounds[i], k))
 
-    if clamp_root:
-        # Root is clamped; rest are free with 2-coloring
-        clamped_blocks = [Block([nodes[0]])]
-        free_nodes = nodes[1:]
-
-        if not free_nodes:
-            free_blocks = []
-            spec = BlockGibbsSpec([], clamped_blocks)
-            prog = FactorSamplingProgram(
-                gibbs_spec=spec, samplers=[], factors=factors,
-                other_interaction_groups=[])
-            root_logits = _beta_prior_logits(priors[0], confidences[0], k)
-            return dict(nodes=nodes, factors=factors, free_blocks=free_blocks,
-                        clamped_blocks=clamped_blocks, spec=spec, program=prog,
-                        n=n, k=k, root_logits=root_logits, single_node=True)
-
-        even = [free_nodes[i] for i in range(0, len(free_nodes), 2)]
-        odd = [free_nodes[i] for i in range(1, len(free_nodes), 2)]
-        free_blocks = [Block(even), Block(odd)] if odd else [Block(even)]
-
-        spec = BlockGibbsSpec(free_blocks, clamped_blocks)
-        sampler = CategoricalGibbsConditional(n_categories=k)
-        prog = FactorSamplingProgram(
-            gibbs_spec=spec,
-            samplers=[sampler] * len(free_blocks),
-            factors=factors,
-            other_interaction_groups=[],
-        )
-        root_logits = _beta_prior_logits(priors[0], confidences[0], k)
-
-        return dict(nodes=nodes, factors=factors, free_blocks=free_blocks,
-                    clamped_blocks=clamped_blocks, spec=spec, program=prog,
-                    n=n, k=k, root_logits=root_logits, single_node=False)
-    else:
-        # All nodes free, 2-coloring
+    if not clamp_root:
         even = [nodes[i] for i in range(0, n, 2)]
         odd = [nodes[i] for i in range(1, n, 2)]
         free_blocks = [Block(even), Block(odd)] if odd else [Block(even)]
         return _assemble_free_graph(nodes, factors, free_blocks, k, n=n)
+
+    # Clamped root path
+    clamped_blocks = [Block([nodes[0]])]
+    root_logits = _beta_prior_logits(priors[0], confidences[0], k)
+    free_nodes = nodes[1:]
+
+    if not free_nodes:
+        spec = BlockGibbsSpec([], clamped_blocks)
+        prog = FactorSamplingProgram(
+            gibbs_spec=spec, samplers=[], factors=factors,
+            other_interaction_groups=[])
+        return dict(nodes=nodes, factors=factors, free_blocks=[],
+                    clamped_blocks=clamped_blocks, spec=spec, program=prog,
+                    n=n, k=k, root_logits=root_logits, single_node=True)
+
+    even = [free_nodes[i] for i in range(0, len(free_nodes), 2)]
+    odd = [free_nodes[i] for i in range(1, len(free_nodes), 2)]
+    free_blocks = [Block(even), Block(odd)] if odd else [Block(even)]
+
+    spec = BlockGibbsSpec(free_blocks, clamped_blocks)
+    sampler = CategoricalGibbsConditional(n_categories=k)
+    prog = FactorSamplingProgram(
+        gibbs_spec=spec, samplers=[sampler] * len(free_blocks),
+        factors=factors, other_interaction_groups=[])
+
+    return dict(nodes=nodes, factors=factors, free_blocks=free_blocks,
+                clamped_blocks=clamped_blocks, spec=spec, program=prog,
+                n=n, k=k, root_logits=root_logits, single_node=False)
+
+
+def _build_three_node_graph(node_priors, edges, k=DEFAULT_K, **labels):
+    """3-node free graph with 2-coloring: nodes[0],nodes[2] in one block, nodes[1] in another.
+
+    node_priors: [(s, c), (s, c), (s, c)]
+    edges: [(parent_idx, child_idx, strength, confidence, background), ...]
+    """
+    nodes = [CategoricalNode() for _ in range(3)]
+    factors = [make_beta_prior_factor(nodes[i], *node_priors[i], k) for i in range(3)]
+    for pi, ci, s, c, bg in edges:
+        factors.append(make_beta_implication_factor(nodes[pi], nodes[ci], s, c, bg, k))
+    free_blocks = [Block([nodes[0], nodes[2]]), Block([nodes[1]])]
+    return _assemble_free_graph(nodes, factors, free_blocks, k, **labels)
 
 
 def build_beta_v_graph(root_prior, root_confidence,
@@ -320,32 +314,15 @@ def build_beta_v_graph(root_prior, root_confidence,
                        left_prior=0.5, left_confidence=0.01,
                        right_prior=0.5, right_confidence=0.01,
                        k=DEFAULT_K):
-    """V-shape:  Left ← Root → Right   (induction topology) with K-bin nodes.
-
-    All nodes are free.
-
-    Returns dict with keys: root, left, right, nodes, factors, free_blocks,
-                            spec, program, k
-    """
-    root = CategoricalNode()
-    left = CategoricalNode()
-    right = CategoricalNode()
-
-    factors = [
-        make_beta_prior_factor(root, root_prior, root_confidence, k),
-        make_beta_prior_factor(left, left_prior, left_confidence, k),
-        make_beta_prior_factor(right, right_prior, right_confidence, k),
-        make_beta_implication_factor(root, left, left_strength,
-                                     left_impl_confidence, left_background, k),
-        make_beta_implication_factor(root, right, right_strength,
-                                     right_impl_confidence, right_background, k),
-    ]
-
-    # Coloring: {left, right} and {root}
-    free_blocks = [Block([left, right]), Block([root])]
-    return _assemble_free_graph(
-        [root, left, right], factors, free_blocks, k,
-        root=root, left=left, right=right)
+    """V-shape: Left ← Root → Right (induction). Nodes order: [left, root, right]."""
+    g = _build_three_node_graph(
+        [(left_prior, left_confidence), (root_prior, root_confidence),
+         (right_prior, right_confidence)],
+        [(1, 0, left_strength, left_impl_confidence, left_background),
+         (1, 2, right_strength, right_impl_confidence, right_background)],
+        k, root=None, left=None, right=None)
+    g["root"], g["left"], g["right"] = g["nodes"][1], g["nodes"][0], g["nodes"][2]
+    return g
 
 
 def build_beta_inv_v_graph(left_prior, left_confidence,
@@ -355,57 +332,15 @@ def build_beta_inv_v_graph(left_prior, left_confidence,
                            left_background, right_background,
                            center_prior=0.5, center_confidence=0.01,
                            k=DEFAULT_K):
-    """Inverted-V:  Left → Center ← Right   (abduction topology) with K-bin nodes.
-
-    All nodes are free (no clamping).
-
-    Returns dict with keys: left, center, right, nodes, factors, free_blocks,
-                            spec, program, k
-    """
-    left = CategoricalNode()
-    center = CategoricalNode()
-    right = CategoricalNode()
-
-    factors = [
-        make_beta_prior_factor(left, left_prior, left_confidence, k),
-        make_beta_prior_factor(right, right_prior, right_confidence, k),
-        make_beta_prior_factor(center, center_prior, center_confidence, k),
-        make_beta_implication_factor(left, center, left_strength,
-                                     left_impl_confidence, left_background, k),
-        make_beta_implication_factor(right, center, right_strength,
-                                     right_impl_confidence, right_background, k),
-    ]
-
-    # Coloring: {left, right} and {center}
-    free_blocks = [Block([left, right]), Block([center])]
-    return _assemble_free_graph(
-        [left, center, right], factors, free_blocks, k,
-        left=left, center=center, right=right)
-
-
-def build_beta_symmetric_pair(prior_a, confidence_a,
-                              prior_b, confidence_b,
-                              strength, impl_confidence,
-                              background=DEFAULT_EPSILON,
-                              k=DEFAULT_K):
-    """Symmetric 2-node graph:  A ↔ B  (Equivalence/Similarity) with K-bin nodes.
-
-    Both nodes are free (no clamping).
-
-    Returns dict with keys: a, b, nodes, factors, free_blocks, spec, program, k
-    """
-    a = CategoricalNode()
-    b = CategoricalNode()
-
-    factors = [
-        make_beta_prior_factor(a, prior_a, confidence_a, k),
-        make_beta_prior_factor(b, prior_b, confidence_b, k),
-        make_beta_implication_factor(a, b, strength, impl_confidence, background, k),
-        make_beta_implication_factor(b, a, strength, impl_confidence, background, k),
-    ]
-
-    free_blocks = [Block([a]), Block([b])]
-    return _assemble_free_graph([a, b], factors, free_blocks, k, a=a, b=b)
+    """Inverted-V: Left → Center ← Right (abduction). Nodes order: [left, center, right]."""
+    g = _build_three_node_graph(
+        [(left_prior, left_confidence), (center_prior, center_confidence),
+         (right_prior, right_confidence)],
+        [(0, 1, left_strength, left_impl_confidence, left_background),
+         (2, 1, right_strength, right_impl_confidence, right_background)],
+        k, left=None, center=None, right=None)
+    g["left"], g["center"], g["right"] = g["nodes"][0], g["nodes"][1], g["nodes"][2]
+    return g
 
 
 def build_beta_symmetric_chain(priors, confidences, strengths, impl_confidences,
@@ -440,20 +375,7 @@ def build_beta_symmetric_chain(priors, confidences, strengths, impl_confidences,
 
 
 def _greedy_color(names, adjacency):
-    """Greedy graph coloring — nodes of the same color share no factors and can be sampled in parallel.
-
-    Parameters
-    ----------
-    names : list[str]
-        Sorted node names (deterministic ordering).
-    adjacency : dict[str, set[str]]
-        For each node, the set of nodes it shares a factor edge with.
-
-    Returns
-    -------
-    list[list[str]]
-        Groups of node names, one list per color.
-    """
+    """Greedy graph coloring → groups of non-adjacent nodes for parallel sampling."""
     color_of = {}
     for name in names:
         neighbor_colors = {color_of[nb] for nb in adjacency.get(name, set())
@@ -470,12 +392,9 @@ def _greedy_color(names, adjacency):
 
 
 def build_beta_full_graph(priors, implications, similarities=None,
-                          equivalences=None, backgrounds=None, k=DEFAULT_K):
+                          equivalences=None, backgrounds=None,
+                          negated_implications=None, k=DEFAULT_K):
     """Compile an entire knowledge base into one beta factor graph.
-
-    Unlike the per-rule builders, this accepts *all* knowledge at once and
-    produces a single factor graph.  One round of Gibbs sampling then yields
-    samples from the full joint distribution.
 
     All nodes are free (no clamping).  Graph-coloring block assignment for
     efficient mixing — nodes that share no factor edge are sampled together.
@@ -487,14 +406,18 @@ def build_beta_full_graph(priors, implications, similarities=None,
     similarities : list[{"src", "dst", "strength", "confidence"}] | None
     equivalences : list[{"src", "dst", "strength", "confidence"}] | None
     backgrounds : dict[(str, str), float] | None
+    negated_implications : list[{"src", "dst", "strength", "confidence"}] | None
+        Implication(A, Not(B)) — compiled as Implication(A, B) with
+        strength flipped to 1-strength.
     """
     similarities = similarities or []
     equivalences = equivalences or []
     backgrounds = backgrounds or {}
+    negated_implications = negated_implications or []
 
     # Collect all node names
     names: set[str] = set(priors.keys())
-    for link in implications:
+    for link in implications + negated_implications:
         names.add(link["src"])
         names.add(link["dst"])
     for link in similarities + equivalences:
@@ -521,6 +444,14 @@ def build_beta_full_graph(priors, implications, similarities=None,
         factors.append(make_beta_implication_factor(
             parent, child, link["strength"], link["confidence"], bg, k))
 
+    # Negated implications: Implication(A, Not(B)) → strength flipped
+    for link in negated_implications:
+        parent = name_to_node[link["src"]]
+        child = name_to_node[link["dst"]]
+        bg = backgrounds.get((link["src"], link["dst"]), DEFAULT_EPSILON)
+        factors.append(make_beta_implication_factor(
+            parent, child, 1.0 - link["strength"], link["confidence"], bg, k))
+
     # Symmetric links → bidirectional
     for link in similarities + equivalences:
         a = name_to_node[link["src"]]
@@ -531,17 +462,17 @@ def build_beta_full_graph(priors, implications, similarities=None,
         factors.append(make_beta_implication_factor(
             b, a, link["strength"], link["confidence"], bg, k))
 
-    # Build adjacency from factor links
+    # Build adjacency and apply graph coloring
     sorted_names = sorted(names)
     adjacency = {name: set() for name in sorted_names}
-    for link in implications:
+    for link in implications + negated_implications:
         adjacency[link["src"]].add(link["dst"])
         adjacency[link["dst"]].add(link["src"])
     for link in similarities + equivalences:
         adjacency[link["src"]].add(link["dst"])
         adjacency[link["dst"]].add(link["src"])
 
-    # Graph coloring → one Block per color group
+    # One Block per color group
     color_groups = _greedy_color(sorted_names, adjacency)
     free_blocks = [Block([name_to_node[n] for n in group]) for group in color_groups]
     spec = BlockGibbsSpec(free_blocks, [])
@@ -596,7 +527,6 @@ def run_beta_sampling(graph, seed=42, n_batches=None, schedule=None):
             subkey, graph["root_logits"], shape=(n_batches, 1)
         ).astype(jnp.uint8)
         state_clamp = [root_state]
-        # Store for later use by estimate_beta_conditional
         graph["_root_clamped_states"] = root_state
     else:
         state_clamp = []
@@ -779,24 +709,23 @@ def _is_clamped_root(graph, node):
 
 
 def _weighted_histogram(target_bins, condition_bins, k):
-    """Build weighted histogram of target bins, weighted by condition bin centers.
-
-    Weight = bin_center[condition_bin] — how "true" the condition is.
-    This gives a proper Bayesian conditional E[target | condition=True].
-    """
+    """Unnormalized weighted histogram — weight = bin_center[condition_bin]."""
     centers = bin_centers(k)
-    weights = centers[condition_bins]  # "truthiness" of each condition sample
-
-    # Weighted histogram: posterior[j] = sum of weights where target == j
+    weights = centers[condition_bins]
     posterior = jnp.zeros(k)
     for j in range(k):
-        mask = (target_bins == j)
-        posterior = posterior.at[j].set(jnp.sum(weights * mask))
+        posterior = posterior.at[j].set(jnp.sum(weights * (target_bins == j)))
+    return posterior
 
+
+def _finalize_posterior(posterior, k):
+    """Normalize posterior and convert to (posterior, strength, confidence)."""
     total = jnp.sum(posterior)
     if total < 1e-10:
-        return jnp.ones(k) / k
-    return posterior / total
+        return jnp.ones(k) / k, 0.5, 0.0
+    posterior = posterior / total
+    strength, confidence = posterior_to_stv(posterior, k)
+    return posterior, strength, confidence
 
 
 def estimate_beta_conditional(samples, graph, target, condition, k=None):
@@ -805,8 +734,6 @@ def estimate_beta_conditional(samples, graph, target, condition, k=None):
     Uses bin-center weighting: each sample is weighted by the "truthiness"
     of the condition variable (bin_center[condition_state]).  This gives
     the proper Bayesian conditional E[target | condition is True].
-
-    Handles clamped root as either condition or target node.
 
     Returns (posterior, strength, confidence).
     """
@@ -829,50 +756,31 @@ def estimate_beta_conditional(samples, graph, target, condition, k=None):
     centers = bin_centers(k)
 
     if cond_is_clamped:
-        # Condition is clamped root, target is free
         tbi, tni = _node_location(graph, target)
-        t_raw = samples[tbi][:, :, tni]  # [n_batches, n_samples]
-        root_flat = _get_root_states()   # [n_batches]
+        t_raw = samples[tbi][:, :, tni]
+        root_flat = _get_root_states()
+        root_weights = centers[root_flat]
 
-        # Weight each batch by root's "truthiness"
-        root_weights = centers[root_flat]  # [n_batches]
-
-        # Weighted histogram of target across all batches
         posterior = jnp.zeros(k)
         for b in range(t_raw.shape[0]):
             batch_hist = jnp.bincount(
                 t_raw[b].astype(jnp.int32), length=k).astype(jnp.float32)
             posterior = posterior + root_weights[b] * batch_hist
-
-        total = jnp.sum(posterior)
-        if total < 1e-10:
-            return jnp.ones(k) / k, 0.5, 0.0
-        posterior = posterior / total
-        strength, confidence = posterior_to_stv(posterior, k)
-        return posterior, strength, confidence
+        return _finalize_posterior(posterior, k)
 
     if target_is_clamped:
-        # Target is clamped root, condition is free — inversion case
         cbi, cni = _node_location(graph, condition)
-        c_raw = samples[cbi][:, :, cni]  # [n_batches, n_samples]
-        root_flat = _get_root_states()    # [n_batches]
+        c_raw = samples[cbi][:, :, cni]
+        root_flat = _get_root_states()
 
-        # For each batch, compute mean condition "truthiness"
-        # Then weight root's bin by that truthiness
         posterior = jnp.zeros(k)
         for b in range(c_raw.shape[0]):
             cond_truthiness = float(jnp.mean(centers[c_raw[b]]))
             root_bin = int(root_flat[b])
             posterior = posterior.at[root_bin].add(cond_truthiness)
+        return _finalize_posterior(posterior, k)
 
-        total = jnp.sum(posterior)
-        if total < 1e-10:
-            return jnp.ones(k) / k, 0.5, 0.0
-        posterior = posterior / total
-        strength, confidence = posterior_to_stv(posterior, k)
-        return posterior, strength, confidence
-
-    # Standard case: both target and condition are in free blocks
+    # Both target and condition are in free blocks
     tbi, tni = _node_location(graph, target)
     cbi, cni = _node_location(graph, condition)
     t_flat = _flatten_node(samples, tbi, tni)
@@ -880,5 +788,4 @@ def estimate_beta_conditional(samples, graph, target, condition, k=None):
 
     posterior = _weighted_histogram(
         t_flat.astype(jnp.int32), c_flat.astype(jnp.int32), k)
-    strength, confidence = posterior_to_stv(posterior, k)
-    return posterior, strength, confidence
+    return _finalize_posterior(posterior, k)

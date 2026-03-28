@@ -16,9 +16,8 @@ from pln_thrml_beta import (
     estimate_beta_marginal, estimate_beta_conditional,
 )
 from metta.atoms import (
-    extract_priors, extract_implications, extract_inheritances,
-    extract_similarities, extract_equivalences, extract_backgrounds,
-    make_stv, make_error,
+    extract_priors, extract_links, extract_backgrounds,
+    extract_negated_implications, make_stv, make_error,
 )
 
 
@@ -28,12 +27,14 @@ def make_compile_op(metta_ref):
 
     def thrml_compile(*atoms):
         priors = extract_priors(metta_ref)
-        impls = extract_implications(metta_ref) + extract_inheritances(metta_ref)
-        sims = extract_similarities(metta_ref)
-        equivs = extract_equivalences(metta_ref)
+        impls = extract_links(metta_ref, "Implication") + extract_links(metta_ref, "Inheritance")
+        sims = extract_links(metta_ref, "Similarity")
+        equivs = extract_links(metta_ref, "Equivalence")
         bgs = extract_backgrounds(metta_ref)
+        neg_impls = extract_negated_implications(metta_ref)
 
-        graph = build_beta_full_graph(priors, impls, sims, equivs, bgs)
+        graph = build_beta_full_graph(priors, impls, sims, equivs, bgs,
+                                      neg_impls)
         samples = run_beta_sampling(graph, seed=42)
 
         cache["graph"] = graph

@@ -6,7 +6,6 @@ requires-python = ">=3.10"
 dependencies = [
     "thrml>=0.1.3",
     "jax>=0.4,<0.6",
-    "numpy>=1.24",
 ]
 
 [project.optional-dependencies]
@@ -15,3 +14,6 @@ dev = ["pytest", "hyperon"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "slow: scalability tests (upstream PLN examples + long chains) — run with -m slow",
+]

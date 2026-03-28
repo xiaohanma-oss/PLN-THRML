@@ -37,7 +37,6 @@ def parse_stv_param(atom):
     return s, c
 
 
-# ── Space queries ─────────────────────────────────────────────────────────
 
 def extract_priors(metta):
     """Query space for node priors: (name (stv s c)).
@@ -81,17 +80,30 @@ def extract_links(metta, link_type):
     return links
 
 
-def extract_implications(metta):
-    return extract_links(metta, "Implication")
 
-def extract_inheritances(metta):
-    return extract_links(metta, "Inheritance")
+def extract_negated_implications(metta):
+    """Query space for ((Implication src (Not dst)) (stv s c)).
 
-def extract_similarities(metta):
-    return extract_links(metta, "Similarity")
+    Returns list of dicts: [{src, dst, strength, confidence}]
+    where dst is the inner atom (without Not wrapper).
+    """
+    query = "!(match &self ((Implication $x (Not $y)) (stv $s $c)) ((Implication $x (Not $y)) (stv $s $c)))"
+    results = metta.run(query)
+    links = []
+    for atom in results[0]:
+        children = atom.get_children()
+        link_atom = children[0]
+        link_children = link_atom.get_children()
+        # link_children[2] is (Not $y), extract inner
+        not_children = link_children[2].get_children()
+        links.append({
+            "src": str(link_children[1]),
+            "dst": str(not_children[1]),
+            "strength": _float_from_atom(children[1].get_children()[1]),
+            "confidence": _float_from_atom(children[1].get_children()[2]),
+        })
+    return links
 
-def extract_equivalences(metta):
-    return extract_links(metta, "Equivalence")
 
 def extract_backgrounds(metta):
     """Query space for ((Background src dst) rate).
@@ -108,15 +120,7 @@ def extract_backgrounds(metta):
     return bgs
 
 
-# ── Lookup helpers ────────────────────────────────────────────────────────
 
-def find_prior(priors, name, default_s=0.5, default_c=0.5):
-    p = priors.get(name)
-    if p is None:
-        return default_s, default_c
-    return p["strength"], p["confidence"]
-
-# ── Result constructors ──────────────────────────────────────────────────
 
 def validate_op_args(atoms, min_children, op_name, expected_format):
     """验证 grounded op 参数并提取 children。成功返回 (children, None)，失败返回 (None, error_list)。"""
@@ -131,8 +135,6 @@ def validate_op_args(atoms, min_children, op_name, expected_format):
 def make_stv(strength, confidence):
     return E(S("stv"), ValueAtom(strength), ValueAtom(confidence))
 
-def make_result(conclusion_atom, strength, confidence):
-    return E(conclusion_atom, make_stv(strength, confidence))
 
 def make_error(msg):
     return E(S("Error"), S(msg))

@@ -6,13 +6,11 @@ Topology: 1-node, dual Beta priors (energy addition = Beta multiplication = Baye
 """
 
 from pln_thrml_beta import (
-    make_beta_prior_factor, sample_and_measure, DEFAULT_K,
+    _assemble_free_graph, make_beta_prior_factor,
+    sample_and_measure, DEFAULT_K,
 )
 from thrml.pgm import CategoricalNode
 from thrml.block_management import Block
-from thrml.block_sampling import BlockGibbsSpec
-from thrml.models.discrete_ebm import CategoricalGibbsConditional
-from thrml.factor import FactorSamplingProgram
 
 from metta.atoms import make_stv, make_error, parse_stv_param
 
@@ -23,15 +21,7 @@ def _build_beta_revision_graph(s1, c1, s2, c2, k=DEFAULT_K):
         make_beta_prior_factor(node, s1, c1, k),
         make_beta_prior_factor(node, s2, c2, k),
     ]
-    free_blocks = [Block([node])]
-    spec = BlockGibbsSpec(free_blocks, [])
-    sampler = CategoricalGibbsConditional(n_categories=k)
-    prog = FactorSamplingProgram(
-        gibbs_spec=spec, samplers=[sampler],
-        factors=factors, other_interaction_groups=[])
-    return dict(nodes=[node], factors=factors, free_blocks=free_blocks,
-                clamped_blocks=[], spec=spec, program=prog,
-                n=1, k=k, single_node=False)
+    return _assemble_free_graph([node], factors, [Block([node])], k)
 
 
 def make_op(metta_ref):
