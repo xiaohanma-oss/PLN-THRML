@@ -25,7 +25,9 @@ from conftest import STRENGTH_TOL, parse_stv, upstream_truth
 class TestModusPonens:
     def test_upstream_smokes(self, metta, pln_lib):
         """From examples/Smokes.metta:
-        Edward smokes (stv 1.0 0.9), smokes→cancerous (stv 0.6 0.9)
+        Inheritance Edward (IntSet smokes) (stv 1.0 0.9)  → simplified to Edward
+        Implication smokes→cancerous (stv 0.6 0.9)        → simplified to Implication Edward Cancerous
+        Upstream expected: (stv 0.6 0.486)
         """
         s, c = parse_stv(metta.run("""
             (Edward (stv 1.0 0.9))
@@ -71,10 +73,14 @@ class TestModusPonens:
         assert c > 0.0
 
 
-# ── Deduction (upstream: examples/DeductionRevision.metta) ──────────────
+# ── Deduction (custom case inspired by DeductionRevision.metta) ─────────
 
 class TestDeduction:
     def test_smokes_pattern(self, metta, pln_lib):
+        """Custom deduction chain A→B→C.
+        Inspired by examples/DeductionRevision.metta topology but uses
+        different STV values (upstream: B,C=0.25, links=0.25/0.5).
+        """
         s, c = parse_stv(metta.run("""
             (A (stv 0.5 0.9))
             (B (stv 0.4 0.9))
@@ -122,11 +128,13 @@ class TestInversion:
         assert c > 0.0
 
 
-# ── Negation (upstream: RuleTester.metta) ───────────────────────────────
+# ── Negation (custom case, verified against Truth_Negation) ──────────────
 
 class TestNegation:
     def test_upstream(self, metta, pln_lib):
-        """Negation is purely analytical — no sampling."""
+        """Negation is purely analytical — no sampling.
+        Custom STV values; verified against PLN's Truth_Negation formula.
+        """
         s, c = parse_stv(metta.run("""
             (Penguin (stv 0.99 0.9))
             !(thrml-negation! (Penguin (stv 0.99 0.9)))
@@ -215,7 +223,11 @@ class TestTransitiveSimilarity:
 class TestInduction:
     def test_upstream_raven(self, metta):
         """From examples/RavenInduction.metta:
-        rv1→raven, rv1→black ⊢ raven→black
+        Inheritance rv1 raven (stv 0.9 0.9)  → simplified to Implication Rv1 Raven
+        Inheritance rv1 (IntSet black) (stv 0.8 0.9) → simplified to Implication Rv1 Black
+        Induction: rv1→raven, rv1→black ⊢ raven→black
+        Note: upstream PLN expects (stv 0.38 0.654) via heuristic formula;
+        beta Bayesian approach yields ~0.77 (systematic difference, not a bug).
         """
         s, c = parse_stv(metta.run("""
             (Raven (stv 0.25 0.9))
@@ -250,7 +262,10 @@ class TestAbduction:
 
 class TestEvalImpl:
     def test_upstream(self, metta):
-        """(Eval IsReallyFat Cat), (Impl IsReallyFat IsFat) ⊢ (Eval IsFat Cat)"""
+        """(Eval IsReallyFat Cat), (Impl IsReallyFat IsFat) ⊢ (Eval IsFat Cat)
+        Note: upstream (evaluationImplicationRuleA.metta) uses Tom, not Cat;
+        we use Cat as a simplified test case with the same STV values.
+        """
         s, c = parse_stv(metta.run("""
             (IsReallyFat (stv 0.25 1.0))
             (Cat (stv 0.25 1.0))

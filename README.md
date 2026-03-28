@@ -178,14 +178,12 @@ vendor/PLN/                trueagi-io/PLN (git submodule) — test baselines
 metta/                     MeTTa integration layer (optional, requires hyperon)
   atoms.py                 Atom extraction from MeTTa space
   ops/
-    rules.py               9 sampling-based rules (declarative table + generic factory)
-    revision.py            Revision rule (dual calling convention)
-    negation.py            Negation rule (analytical, no sampling)
+    rules.py               All 11 rules (declarative table + generic factory, including revision & negation)
   declarations/
     pln_types.metta        Type declarations (stv, Implication, Similarity, etc.)
 tests/
-  test_golden.py           All rules verified end-to-end via MeTTa
-  test_beta.py             Beta engine unit tests
+  test_metta.py            All rules verified end-to-end via MeTTa
+  test_factor_graph.py     Factor graph engine unit tests
   test_scale.py            Scalability tests from trueagi-io/PLN examples (pytest -m slow)
 docs/
   results.md               Full per-rule results tables
