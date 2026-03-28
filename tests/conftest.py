@@ -2,8 +2,13 @@
 
 import os
 import pytest
-from hyperon import MeTTa
-from metta import register_all
+
+try:
+    from hyperon import MeTTa
+    from metta import register_all
+    _HAS_HYPERON = True
+except ImportError:
+    _HAS_HYPERON = False
 
 
 STRENGTH_TOL = 0.05   # beta K=16 has quantization noise
@@ -17,6 +22,8 @@ _PLN_LIB_PATH = os.path.join(
 @pytest.fixture
 def metta():
     """Fresh MeTTa runner with all thrml ops registered."""
+    if not _HAS_HYPERON:
+        pytest.skip("hyperon not installed")
     m = MeTTa()
     register_all(m)
     return m
@@ -25,6 +32,8 @@ def metta():
 @pytest.fixture(scope="module")
 def pln_lib():
     """Module-scoped MeTTa runner with upstream lib_pln.metta loaded."""
+    if not _HAS_HYPERON:
+        pytest.skip("hyperon not installed")
     m = MeTTa()
     # min/max not built-in in this MeTTa version
     m.run("(= (min $a $b) (if (< $a $b) $a $b))")

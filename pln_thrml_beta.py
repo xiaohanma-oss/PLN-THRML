@@ -27,6 +27,26 @@ from thrml.factor import FactorSamplingProgram
 EPS = 1e-7          # clamp for log-safety
 DEFAULT_EPSILON = 0.02  # PLN modus-ponens background rate
 
+__all__ = [
+    # Constants
+    "EPS", "DEFAULT_EPSILON", "DEFAULT_K",
+    "DEFAULT_BETA_N_BATCHES", "DEFAULT_BETA_SCHEDULE",
+    # Conversion
+    "c2w", "w2c", "bin_centers", "bin_width",
+    "stv_to_beta_params", "posterior_to_stv", "effective_k",
+    # Weights & factors
+    "beta_prior_weights", "beta_implication_weights",
+    "make_beta_prior_factor", "make_beta_implication_factor",
+    # Graph builders
+    "build_beta_chain", "build_beta_full_graph",
+    "build_beta_v_graph", "build_beta_inv_v_graph",
+    "build_beta_symmetric_chain",
+    # Sampling & measurement
+    "run_beta_sampling", "sample_and_measure",
+    "diagnose_convergence",
+    "estimate_beta_marginal", "estimate_beta_conditional",
+]
+
 
 def c2w(c):
     """Confidence → evidence weight.  lib_pln.metta: Truth_c2w = c/(1-c)."""
@@ -216,6 +236,27 @@ def make_beta_implication_factor(parent, child, strength, confidence,
 #  Graph builders
 # ═══════════════════════════════════════════════════════════════════════════
 
+def _greedy_color(names, adjacency):
+    """Greedy graph coloring: partition nodes into independent groups.
+
+    Returns a list of groups where no two nodes within a group are adjacent.
+    """
+    color_of = {}
+    for name in names:
+        neighbor_colors = {color_of[nb] for nb in adjacency.get(name, set())
+                           if nb in color_of}
+        c = 0
+        while c in neighbor_colors:
+            c += 1
+        color_of[name] = c
+
+    n_colors = max(color_of.values(), default=-1) + 1
+    groups = [[] for _ in range(n_colors)]
+    for name in names:
+        groups[color_of[name]].append(name)
+    return groups
+
+
 def _assemble_free_graph(nodes, factors, free_blocks, k=DEFAULT_K, **extra):
     """Assemble a fully free (no clamp) factor graph into a sampling program."""
     spec = BlockGibbsSpec(free_blocks, [])
@@ -374,30 +415,13 @@ def build_beta_symmetric_chain(priors, confidences, strengths, impl_confidences,
     return _assemble_free_graph(nodes, factors, free_blocks, k, n=n)
 
 
-def _greedy_color(names, adjacency):
-    """Greedy graph coloring → groups of non-adjacent nodes for parallel sampling."""
-    color_of = {}
-    for name in names:
-        neighbor_colors = {color_of[nb] for nb in adjacency.get(name, set())
-                          if nb in color_of}
-        c = 0
-        while c in neighbor_colors:
-            c += 1
-        color_of[name] = c
-    n_colors = max(color_of.values()) + 1 if color_of else 1
-    groups = [[] for _ in range(n_colors)]
-    for name in names:
-        groups[color_of[name]].append(name)
-    return [g for g in groups if g]
-
-
 def build_beta_full_graph(priors, implications, similarities=None,
                           equivalences=None, backgrounds=None,
                           negated_implications=None, k=DEFAULT_K):
     """Compile an entire knowledge base into one beta factor graph.
 
-    All nodes are free (no clamping).  Graph-coloring block assignment for
-    efficient mixing — nodes that share no factor edge are sampled together.
+    All nodes are free (no clamping).  Single-node-per-block for arbitrary
+    topologies.
 
     Parameters
     ----------
@@ -462,9 +486,9 @@ def build_beta_full_graph(priors, implications, similarities=None,
         factors.append(make_beta_implication_factor(
             b, a, link["strength"], link["confidence"], bg, k))
 
-    # Build adjacency and apply graph coloring
-    sorted_names = sorted(names)
-    adjacency = {name: set() for name in sorted_names}
+    # Color graph so non-adjacent nodes share a block
+    sorted_names = sorted(name_to_node.keys())
+    adjacency = {n: set() for n in sorted_names}
     for link in implications + negated_implications:
         adjacency[link["src"]].add(link["dst"])
         adjacency[link["dst"]].add(link["src"])
@@ -472,9 +496,8 @@ def build_beta_full_graph(priors, implications, similarities=None,
         adjacency[link["src"]].add(link["dst"])
         adjacency[link["dst"]].add(link["src"])
 
-    # One Block per color group
-    color_groups = _greedy_color(sorted_names, adjacency)
-    free_blocks = [Block([name_to_node[n] for n in group]) for group in color_groups]
+    groups = _greedy_color(sorted_names, adjacency)
+    free_blocks = [Block([name_to_node[n] for n in grp]) for grp in groups]
     spec = BlockGibbsSpec(free_blocks, [])
     samplers = [CategoricalGibbsConditional(n_categories=k) for _ in free_blocks]
 
