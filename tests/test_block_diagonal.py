@@ -53,10 +53,11 @@ class TestPartitioning:
             {"src": "D", "dst": "E", "strength": 0.5, "confidence": 0.75},
         ]
         partition = partition_into_blocks(priors, implications, max_block_size=3)
-        assert len(partition.blocks) >= 2
+        # 5-chain max=3: merge pass should produce 2 blocks, not 3
+        assert len(partition.blocks) == 2
         assert all(len(b) <= 3 for b in partition.blocks)
-        # At least one cut edge
-        assert len(partition.cut_edges) >= 1
+        # Exactly one cut edge after merge
+        assert len(partition.cut_edges) == 1
         # Boundary nodes should exist
         assert len(partition.boundary_nodes) >= 1
 
@@ -195,6 +196,14 @@ class TestMessagePassing:
         assert s_bd == pytest.approx(s_full, abs=0.15), \
             f"Diamond block-diag s={s_bd:.3f} vs full s={s_full:.3f}"
         assert c_bd > 0
+
+        # max=3: D is isolated (B→D and C→D are both cut edges).
+        # Both messages must be accumulated, not overwritten.
+        s_bd3, c_bd3 = sample_and_measure_block_diagonal(
+            priors, implications, "D", k=4, max_block_size=3, seed=42)
+        assert s_bd3 == pytest.approx(s_full, abs=0.15), \
+            f"Diamond max=3 block-diag s={s_bd3:.3f} vs full s={s_full:.3f}"
+        assert c_bd3 > 0
 
     def test_convergence_happens(self):
         """Message passing should converge (n_iterations < max_iterations)."""

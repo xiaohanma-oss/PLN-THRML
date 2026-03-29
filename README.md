@@ -25,14 +25,14 @@
 ## Overview
 
 PLN treats inference as probability propagation; the Thermodynamic Sampling
-Unit (TSU) treats computation as energy minimisation.  The Boltzmann
-distribution `P ∝ e^{−ℰ}` bridges the two: take the log of each PLN
-conditional probability and you get factor-graph weights.
+Unit (TSU) treats computation as energy minimisation. The Boltzmann
+distribution `P(x) ∝ e^{−ℰ(x)}` connects the two: the log of each PLN
+conditional probability is directly a factor-graph weight.
 
-The question is whether this compilation preserves PLN's semantics — not just
-strength, but also confidence.  This repo validates that it does: all 11 PLN
-inference rules are compiled via Beta discretization and verified against
-PLN's analytical formulas.
+The central question is whether this compilation preserves PLN's full
+semantics — not just strength, but also confidence. This repo shows that it
+does: all 11 PLN inference rules are compiled via Beta discretization and
+verified against PLN's analytical formulas.
 
 ## How it works
 
@@ -59,23 +59,17 @@ See [docs/beta-discretization.md](docs/beta-discretization.md) for details.
 
 ## Installation
 
-**From PyPI:**
-
 ```bash
-pip install pln-thrml                     # core only (thrml + jax)
-pip install pln-thrml[metta]              # + MeTTa bridge (requires hyperon)
-```
-
-**From source:**
-
-```bash
-git clone https://github.com/mafeifei666666/PLN-THRML.git
+git clone --recurse-submodules https://github.com/mafeifei666666/PLN-THRML.git
 cd PLN-THRML
-pip install -e .                          # editable install
+pip install -e .                          # core only (thrml + jax)
+pip install -e ".[metta]"                 # + MeTTa bridge (requires hyperon)
+pip install -e ".[dev]"                   # + pytest for running tests
 ```
 
-> To run tests, also fetch the [trueagi-io/PLN](https://github.com/trueagi-io/PLN)
-> test baselines: `git submodule update --init && pip install -e ".[dev]"`
+> The [trueagi-io/PLN](https://github.com/trueagi-io/PLN) submodule provides
+> test baselines.  If you cloned without `--recurse-submodules`, run
+> `git submodule update --init`.
 
 ## Quick start
 
@@ -137,6 +131,37 @@ posterior.  Inversion gives exact Bayesian P(A|B) vs PLN's heuristic.
 
 Full per-rule tables and divergence analysis: [docs/results.md](docs/results.md)
 
+### Effect of K on accuracy
+
+Reducing K from 16 to 4 (for TSU hardware deployment) introduces additional
+discretization error.  Measured on Modus Ponens (s_A=0.8, s_AB=0.9, PLN
+analytical strength = 0.724) and single-node prior recovery:
+
+| K | MP Δs vs PLN | Prior Δs (worst) | Prior Δc (worst) | Couplings/impl |
+|---|---|---|---|---|
+| 16 | 0.008 | 0.001 | 0.013 | 256 |
+| 8 | 0.011 | 0.008 | 0.035 | 64 |
+| 4 | 0.024 | 0.019 | 0.067 | 16 |
+
+K=4 strength error is 0.024 — well within the 0.05 tolerance used for K=16
+tests.  Confidence recovery degrades more (Δc up to 0.067) because
+moment-matching from 4 bins has less information.
+
+### Block-diagonal vs full-graph accuracy
+
+Comparing block-diagonal inference (K=4, inter-block BP messages) against
+full-graph inference (K=4, all nodes in one graph):
+
+| Topology | Full s | Block-diag s | Δs | Iterations | Converged |
+|---|---|---|---|---|---|
+| 3-chain A→B→C | 0.660 | 0.642 | 0.018 | 3 | ✓ |
+| 5-chain A→…→E | 0.252 | 0.183 | 0.069 | 7 | ✓ |
+| Diamond A→{B,C}→D | 0.129 | 0.222 | 0.094 | 20 | ✗ |
+
+Tree-structured graphs converge quickly with small error.  The diamond
+(cyclic block graph) shows the known limitation of loopy BP — damped
+iterations bound but do not eliminate the error.
+
 ## What this means for Hyperon
 
 1. **Complete Q_tv on THRML**: The Hyperon whitepaper (2025) defines PLN
@@ -144,7 +169,7 @@ Full per-rule tables and divergence analysis: [docs/results.md](docs/results.md)
    This project demonstrates that the entire Q_tv component — both the
    quantale product ⊗ (evidence combination at factors) and the quantale
    sum ⊕ (marginalization at variables) — can be compiled to thrml factor
-   graphs (log-probability weights, via `P ∝ e^{−ℰ}`) and executed through
+   graphs (log-probability weights, via `P(x) ∝ e^{−ℰ(x)}`) and executed through
    Gibbs sampling.  All 11 PLN
    rules verified end-to-end across multiple parameter sets constitute the
    evidence.  Q_logic (rule selection, structure discovery) remains with
@@ -194,27 +219,33 @@ Full per-rule tables and divergence analysis: [docs/results.md](docs/results.md)
 
 ```
 pln_thrml_beta.py          Beta factor graph engine (builds, samples, recovers stv)
+block_diagonal.py          Block-diagonal decomposition + loopy BP for large/cyclic graphs
 vendor/PLN/                trueagi-io/PLN (git submodule) — test baselines
 metta/                     MeTTa integration layer (optional, requires hyperon)
+  __init__.py              Entry point — exports register_all()
   atoms.py                 Atom extraction from MeTTa space
   ops/
     rules.py               All 11 rules (declarative table + generic factory, including revision & negation)
   declarations/
     pln_types.metta        Type declarations (stv, Implication, Similarity, etc.)
 tests/
-  test_metta.py            All rules verified end-to-end via MeTTa
+  conftest.py              Shared fixtures and tolerance constants (strength ±0.05, confidence ±0.15)
   test_factor_graph.py     Factor graph engine unit tests (K=4/8/16 parametrized)
+  test_metta.py            All rules verified end-to-end via MeTTa
+  test_block_diagonal.py   Block-diagonal decomposition tests (partitioning, BP, convergence)
   test_scale.py            Scalability tests from trueagi-io/PLN examples (pytest -m slow)
 docs/
   results.md               Full per-rule results tables
   pln-formulas.md          PLN truth-value confidence formulas
   beta-discretization.md   Beta-discretized approach details
-  interactive_overview.html  Interactive visualisation overview
+  interactive_overview.html  Interactive visualisation (4 tabs: pipeline, 11 rules, energy, block-diagonal)
 ```
 
 ## Not yet covered
 
-- **Cyclic inference**: Loopy graphs (A→B→C→A) — highest-leverage extension
+- **Cyclic inference (full-graph)**: `block_diagonal.py` handles cyclic *block*
+  graphs via damped loopy BP; full-graph cyclic Gibbs (without block
+  decomposition) is not yet implemented.
 - **EvidenceID / StampDisjoint**: Evidence tracking to prevent double-counting
   during revision (PLN uses `StampDisjoint` and `StampConcat`).
 - **PLN.Derive**: Priority-queue based iterative inference engine with
@@ -223,11 +254,15 @@ docs/
   subgraphs to sample first.
 - **Continuous-valued nodes**: Extending beyond discrete propositions.
 
+See [docs/future-work/future-work.md](docs/future-work/future-work.md) for
+detailed analysis including native pdit support, low-rank factorization,
+geodesic controller scheduling, and other block-diagonal extensions.
+
 ## Contributing
 
+See [Installation](#installation) for setup, then:
+
 ```bash
-git clone --recurse-submodules https://github.com/mafeifei666666/PLN-THRML.git
-cd PLN-THRML
 pip install -e ".[dev]"
 pytest tests/ -v
 ```
@@ -252,6 +287,18 @@ pytest tests/ -v
 6. Jelincic, Lockwood, Garlapati, Schillinger, Chuang, Verdon, McCourt.
    *An efficient probabilistic hardware architecture for diffusion-like models*.
    arXiv:2510.23972, 2025.
+
+7. Goertzel, B. *Evidence Is to Logic What Energy Is to Physics*.
+   Substack, March 2026.
+
+8. Tran, Mota, Garcez.
+   *Reasoning in Neurosymbolic AI (Logical Boltzmann Machines)*.
+   arXiv:2505.20313, 2025.
+
+9. Goertzel, B. *Quantum Logic Networks: PLN-Style Inference in the
+   Operator Evidence Algebra*. March 2026.
+   §9.2 block-diagonal hardware regime (d=4–16) directly motivates
+   this project's block-diagonal architecture.
 
 ## License
 

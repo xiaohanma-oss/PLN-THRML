@@ -243,6 +243,23 @@ def partition_into_blocks(priors, implications, similarities=None,
 
     blocks = _connected_components(names, remaining_adj)
 
+    # Merge pass: combine adjacent small blocks via cut edges (strongest first)
+    merged = True
+    while merged:
+        merged = False
+        for ce in sorted(cut_edges, key=lambda e: e[3], reverse=True):
+            src, dst, link, conf = ce
+            bi_src = next((i for i, bl in enumerate(blocks) if src in bl), None)
+            bi_dst = next((i for i, bl in enumerate(blocks) if dst in bl), None)
+            if bi_src is None or bi_dst is None or bi_src == bi_dst:
+                continue
+            if len(blocks[bi_src]) + len(blocks[bi_dst]) <= max_block_size:
+                blocks[bi_src] = sorted(blocks[bi_src] + blocks[bi_dst])
+                del blocks[bi_dst]
+                cut_edges.remove(ce)
+                merged = True
+                break  # restart after merge
+
     # Identify boundary nodes: endpoints of cut edges
     node_to_blocks = defaultdict(list)
     for bi, block in enumerate(blocks):
@@ -547,27 +564,30 @@ def run_block_diagonal_sampling(priors, implications, similarities=None,
                 posterior, _, _ = estimate_beta_marginal(samples, graph, node)
                 block_marginals[(name, bi)] = posterior
 
-        # Update messages: compute proper BP messages through implication factors
+        # Update messages: accumulate all incoming messages per target node,
+        # then apply damping. Multiple cut edges pointing to the same target
+        # (e.g. B→D and C→D in a diamond) must be summed in log-space
+        # (= multiplied in probability space), not overwritten.
+        new_log_ws: dict = {}
         for source, source_block, target, target_block, w_table, direction in message_routes:
             source_marginal = block_marginals.get((source, source_block))
             if source_marginal is None:
                 continue
+            msg = _compute_bp_message(source_marginal, w_table, direction)
+            key = (target, target_block)
+            new_log_ws[key] = new_log_ws[key] + msg if key in new_log_ws else msg
 
-            new_log_w = _compute_bp_message(source_marginal, w_table, direction)
-            old_log_w = messages[(target, target_block)]
-
+        for key, new_log_w in new_log_ws.items():
+            old_log_w = messages[key]
             if use_damping:
                 new_log_w = damping * new_log_w + (1 - damping) * old_log_w
-
             # Compute KL for convergence check
             old_prob = jnp.exp(old_log_w - jnp.max(old_log_w))
             old_prob = old_prob / jnp.sum(old_prob)
             new_prob = jnp.exp(new_log_w - jnp.max(new_log_w))
             new_prob = new_prob / jnp.sum(new_prob)
-            kl = _kl_divergence(new_prob, old_prob)
-            max_kl = max(max_kl, kl)
-
-            messages[(target, target_block)] = new_log_w
+            max_kl = max(max_kl, _kl_divergence(new_prob, old_prob))
+            messages[key] = new_log_w
 
         if max_kl < kl_threshold:
             converged = True

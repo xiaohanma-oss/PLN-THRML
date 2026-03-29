@@ -15,7 +15,7 @@ Usage:
     metta.run('''
         (A (stv 0.8 0.9))
         ((Implication A B) (stv 0.9 0.85))
-        !(thrml-modus-ponens! (A B))
+        !(thrml-modus-ponens! (A B (stv 0.8 0.9) (stv 0.9 0.85)))
     ''')
 
 Install: pip install pln-thrml[metta]
