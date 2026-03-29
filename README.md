@@ -55,6 +55,7 @@ See [docs/beta-discretization.md](docs/beta-discretization.md) for details.
 | Deduction chain | Chain factor graph | Pipeline of coupled clusters |
 | Induction (V-shape) | Star factor graph | Hub-and-spoke topology |
 | Abduction (inverted-V) | Collider factor graph | Explaining-away circuit |
+| Large knowledge graph | Block-diagonal decomposition | Block-local Gibbs + BP messages |
 
 ## Installation
 
@@ -180,6 +181,15 @@ Full per-rule tables and divergence analysis: [docs/results.md](docs/results.md)
    treat each K-state variable as one hardware unit and substantially
    relax this limit.
 
+7. **Block-diagonal architecture**: `block_diagonal.py` addresses the TSU
+   connectivity bottleneck by partitioning large graphs into blocks of 2–4
+   propositions with K=4 (16 couplings per implication, fits 12-connection
+   budget).  Block-internal inference uses exact Gibbs sampling; block-boundary
+   influence propagates via BP-style messages through implication factors.
+   Tree-structured block graphs converge exactly (Pearl 1988); cyclic graphs
+   use damped loopy BP.  Z1 capacity estimate: ~1,225 simultaneous propositions
+   (4,900 p-bits ÷ 4 p-bits/prop), ~60,000 with time-division multiplexing.
+
 ## Project structure
 
 ```
@@ -193,12 +203,13 @@ metta/                     MeTTa integration layer (optional, requires hyperon)
     pln_types.metta        Type declarations (stv, Implication, Similarity, etc.)
 tests/
   test_metta.py            All rules verified end-to-end via MeTTa
-  test_factor_graph.py     Factor graph engine unit tests
+  test_factor_graph.py     Factor graph engine unit tests (K=4/8/16 parametrized)
   test_scale.py            Scalability tests from trueagi-io/PLN examples (pytest -m slow)
 docs/
   results.md               Full per-rule results tables
   pln-formulas.md          PLN truth-value confidence formulas
   beta-discretization.md   Beta-discretized approach details
+  interactive_overview.html  Interactive visualisation overview
 ```
 
 ## Not yet covered

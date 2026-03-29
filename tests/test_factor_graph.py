@@ -12,7 +12,8 @@ from pln_thrml_beta import (
     estimate_beta_marginal, estimate_beta_conditional,
     diagnose_convergence, sample_and_measure,
 )
-from conftest import STRENGTH_TOL, CONFIDENCE_TOL, upstream_truth
+from conftest import (STRENGTH_TOL, CONFIDENCE_TOL, upstream_truth,
+                      strength_tol, confidence_tol)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -651,3 +652,87 @@ class TestSampleAndMeasure:
         # Different seeds should give slightly different results
         # (not exactly equal, though both should be close)
         assert not (s1 == pytest.approx(s2, abs=1e-10))
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  K=4/8 validation for block-diagonal architecture
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestVariableK:
+    """Validate that K=4 and K=8 produce acceptable results.
+
+    Block-diagonal TSU deployment uses K=4 within blocks.
+    These tests quantify accuracy degradation vs K=16 baseline.
+    """
+
+    @pytest.mark.parametrize("k", [4, 8, 16])
+    def test_bin_centers_properties(self, k):
+        """Bin centers should be symmetric and within (0,1) for any K."""
+        c = bin_centers(k)
+        assert len(c) == k
+        assert float(c[0]) > 0.0
+        assert float(c[-1]) < 1.0
+        assert abs(float(c[0]) + float(c[-1]) - 1.0) < 1e-6
+
+    @pytest.mark.parametrize("k", [4, 8, 16])
+    def test_prior_weights_shape_and_centered(self, k):
+        """Prior weights should have correct shape and be centered."""
+        w = beta_prior_weights(0.8, 0.9, k=k)
+        assert w.shape == (k,)
+        assert abs(float(jnp.mean(w))) < 1e-5
+
+    @pytest.mark.parametrize("k", [4, 8, 16])
+    def test_implication_weights_shape(self, k):
+        """Implication weights should be K×K."""
+        w = beta_implication_weights(0.9, 0.85, k=k)
+        assert w.shape == (k, k)
+
+    @pytest.mark.parametrize("k", [4, 8, 16])
+    @pytest.mark.parametrize("s_in,c_in", [
+        (0.8, 0.9),
+        (0.3, 0.7),
+        (0.5, 0.5),
+    ])
+    def test_prior_recovery(self, k, s_in, c_in):
+        """Single node prior recovery at different K values."""
+        graph = build_beta_chain(
+            priors=[s_in], confidences=[c_in],
+            strengths=[], impl_confidences=[], backgrounds=[],
+            k=k,
+        )
+        samples = run_beta_sampling(graph, seed=42)
+        _, s_out, c_out = estimate_beta_marginal(samples, graph, graph["nodes"][0])
+        assert s_out == pytest.approx(s_in, abs=strength_tol(k))
+        assert c_out == pytest.approx(c_in, abs=confidence_tol(k))
+
+    @pytest.mark.parametrize("k", [4, 8, 16])
+    def test_modus_ponens_k(self, pln_lib, k):
+        """Modus ponens at different K values — strength should be reasonable."""
+        s_A, c_A, s_AB, c_AB = 0.8, 0.9, 0.9, 0.85
+        exp_s, _ = upstream_truth(pln_lib, "Truth_ModusPonens",
+                                  (s_A, c_A), (s_AB, c_AB))
+
+        graph = build_beta_chain(
+            priors=[s_A, 0.5],
+            confidences=[c_A, 0.01],
+            strengths=[s_AB],
+            impl_confidences=[c_AB],
+            backgrounds=[0.02],
+            k=k,
+        )
+        samples = run_beta_sampling(graph, seed=42)
+        _, s_out, _ = estimate_beta_marginal(samples, graph, graph["nodes"][1])
+        assert s_out == pytest.approx(exp_s, abs=strength_tol(k))
+
+    @pytest.mark.parametrize("k", [4, 8, 16])
+    def test_roundtrip_stv(self, k):
+        """Beta PDF → discretize → posterior_to_stv roundtrip at variable K."""
+        from jax.scipy.stats import beta as beta_dist
+        s_in, c_in = 0.7, 0.8
+        alpha, beta_param = stv_to_beta_params(s_in, c_in)
+        centers = bin_centers(k)
+        posterior = beta_dist.pdf(centers, alpha, beta_param)
+        posterior = posterior / jnp.sum(posterior)
+        s_out, c_out = posterior_to_stv(posterior, k)
+        assert s_out == pytest.approx(s_in, abs=strength_tol(k))
+        assert c_out == pytest.approx(c_in, abs=confidence_tol(k))
