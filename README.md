@@ -25,9 +25,9 @@
 ## Overview
 
 PLN treats inference as probability propagation; the Thermodynamic Sampling
-Unit (TSU) treats computation as energy minimisation.  The transform
-`W = log P(child|parent)` bridges the two: every PLN conditional probability
-table compiles directly into a Boltzmann energy table.
+Unit (TSU) treats computation as energy minimisation.  The Boltzmann
+distribution `P ∝ e^{−ℰ}` bridges the two: take the log of each PLN
+conditional probability and you get factor-graph weights.
 
 The question is whether this compilation preserves PLN's semantics — not just
 strength, but also confidence.  This repo validates that it does: all 11 PLN
@@ -37,7 +37,7 @@ PLN's analytical formulas.
 ## How it works
 
 1. **Parameterize** — PLN `(stv s c)` → Beta(α, β) with mean = s
-2. **Build graph** — `W = log P`: each node becomes a K=16 bin `CategoricalNode`; each implication becomes a K×K energy factor
+2. **Build graph** — discretize each Beta distribution into K=16 bins (`CategoricalNode`); each implication becomes a K×K weight table (log of the discretized conditional Beta)
 3. **Sample** — Block Gibbs sampling (50 batches × 2,000 samples)
 4. **Recover** — moment-match the posterior histogram → `(strength, confidence)`
 
@@ -49,7 +49,7 @@ See [docs/beta-discretization.md](docs/beta-discretization.md) for details.
 |---|---|---|
 | Proposition (VariableAtom) | `CategoricalNode` (K=16 bins) | p-bit cluster (multi-bit) |
 | Prior P(A) | Unary `CategoricalEBMFactor` (Beta prior) | Bias field on p-bits |
-| Implication A→B (strength s) | Pairwise `CategoricalEBMFactor` (K×K) | Coupling matrix between clusters |
+| Implication A→B (strength s) | Pairwise `SquareCategoricalEBMFactor` (K×K) | Coupling matrix between clusters |
 | TruthValue (strength, confidence) | Beta posterior → moment-matching | Posterior distribution readout |
 | Inference rule | Block Gibbs sampling | Thermal equilibration |
 | Deduction chain | Chain factor graph | Pipeline of coupled clusters |
@@ -143,14 +143,15 @@ Full per-rule tables and divergence analysis: [docs/results.md](docs/results.md)
    This project demonstrates that the entire Q_tv component — both the
    quantale product ⊗ (evidence combination at factors) and the quantale
    sum ⊕ (marginalization at variables) — can be compiled to thrml factor
-   graphs via `W = log P` and executed through Gibbs sampling.  All 11 PLN
+   graphs (log-probability weights, via `P ∝ e^{−ℰ}`) and executed through
+   Gibbs sampling.  All 11 PLN
    rules verified end-to-end across multiple parameter sets constitute the
    evidence.  Q_logic (rule selection, structure discovery) remains with
    CPU/GPU; all truth-value computation has a complete path to
    thermodynamic hardware.
 
 2. **Direct compilation path**: MeTTa PLN rules can be compiled to thrml
-   factor graphs via the `W = log P` transform, then executed on Extropic's
+   factor graphs (log-probability weights), then executed on Extropic's
    TSU.  No approximation is introduced — the factor graph encodes the
    exact same joint distribution that PLN reasons over.
 
@@ -169,6 +170,15 @@ Full per-rule tables and divergence analysis: [docs/results.md](docs/results.md)
    covering [trueagi-io/PLN](https://github.com/trueagi-io/PLN) examples — DeductionRevision (diamond DAG),
    FlyingRaven (conflicting paths with negation), Smokes (social network
    propagation), and RavenInduction (instance-to-class generalization).
+
+6. **Hardware outlook**: Extropic's Z1 chip (early 2026) provides 250,000
+   p-bits.  Each K=16 proposition requires 4 p-bits (62,500 nodes upper
+   bound), but each pairwise implication expands to 16×16 = 256 binary
+   couplings under sum-of-spins embedding, and each p-bit has only ~12
+   physical connections — so connectivity, not p-bit count, is the
+   binding constraint.  Native pdit support (validated on X0) would
+   treat each K-state variable as one hardware unit and substantially
+   relax this limit.
 
 ## Project structure
 

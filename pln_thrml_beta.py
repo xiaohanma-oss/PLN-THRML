@@ -20,7 +20,9 @@ import jax.numpy as jnp
 from thrml.block_management import Block
 from thrml.block_sampling import BlockGibbsSpec, SamplingSchedule, sample_states
 from thrml.pgm import CategoricalNode
-from thrml.models.discrete_ebm import CategoricalEBMFactor, CategoricalGibbsConditional
+from thrml.models.discrete_ebm import (CategoricalEBMFactor,
+                                       SquareCategoricalEBMFactor,
+                                       CategoricalGibbsConditional)
 from thrml.factor import FactorSamplingProgram
 
 
@@ -229,7 +231,7 @@ def make_beta_implication_factor(parent, child, strength, confidence,
     Weight shape: [1, K, K].
     """
     w = beta_implication_weights(strength, confidence, background, k)
-    return CategoricalEBMFactor([Block([parent]), Block([child])], w[None, :, :])
+    return SquareCategoricalEBMFactor([Block([parent]), Block([child])], w[None, :, :])
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -661,15 +663,19 @@ def diagnose_convergence(samples, graph, node):
     if grand_var < 1e-12:
         ess = n_total
     else:
-        # Compute autocorrelation up to lag 100
         max_lag = min(100, n_total // 4)
         centered = grand_chain - grand_mean_val
-        acf_sum = 0.0
-        for lag in range(1, max_lag + 1):
-            acf = float(jnp.mean(centered[:-lag] * centered[lag:])) / grand_var
-            if acf < 0.05:
-                break
-            acf_sum += acf
+        # Vectorized autocorrelation for all lags at once
+        acfs = jnp.array([
+            jnp.mean(centered[:-lag] * centered[lag:]) / grand_var
+            for lag in range(1, max_lag + 1)
+        ])
+        # Find first lag where acf drops below 0.05 (cutoff)
+        below_threshold = acfs < 0.05
+        cutoff = jnp.argmax(below_threshold)  # 0 if none below
+        # If no lag is below threshold, use all lags
+        cutoff = jnp.where(jnp.any(below_threshold), cutoff, max_lag)
+        acf_sum = float(jnp.sum(acfs[:cutoff]))
         ess = max(1, int(n_total / (1 + 2 * acf_sum)))
 
     converged = (r_hat < 1.05) and (ess > 400)
@@ -735,10 +741,8 @@ def _weighted_histogram(target_bins, condition_bins, k):
     """Unnormalized weighted histogram — weight = bin_center[condition_bin]."""
     centers = bin_centers(k)
     weights = centers[condition_bins]
-    posterior = jnp.zeros(k)
-    for j in range(k):
-        posterior = posterior.at[j].set(jnp.sum(weights * (target_bins == j)))
-    return posterior
+    one_hot = jax.nn.one_hot(target_bins, k)       # [N, K]
+    return one_hot.T @ weights                      # [K]
 
 
 def _finalize_posterior(posterior, k):
@@ -784,11 +788,9 @@ def estimate_beta_conditional(samples, graph, target, condition, k=None):
         root_flat = _get_root_states()
         root_weights = centers[root_flat]
 
-        posterior = jnp.zeros(k)
-        for b in range(t_raw.shape[0]):
-            batch_hist = jnp.bincount(
-                t_raw[b].astype(jnp.int32), length=k).astype(jnp.float32)
-            posterior = posterior + root_weights[b] * batch_hist
+        one_hot = jax.nn.one_hot(t_raw.astype(jnp.int32), k)  # [batches, samples, K]
+        batch_hists = one_hot.sum(axis=1)                        # [batches, K]
+        posterior = (root_weights[:, None] * batch_hists).sum(axis=0)  # [K]
         return _finalize_posterior(posterior, k)
 
     if target_is_clamped:
@@ -796,11 +798,9 @@ def estimate_beta_conditional(samples, graph, target, condition, k=None):
         c_raw = samples[cbi][:, :, cni]
         root_flat = _get_root_states()
 
-        posterior = jnp.zeros(k)
-        for b in range(c_raw.shape[0]):
-            cond_truthiness = float(jnp.mean(centers[c_raw[b]]))
-            root_bin = int(root_flat[b])
-            posterior = posterior.at[root_bin].add(cond_truthiness)
+        cond_truthiness = jnp.mean(centers[c_raw], axis=1)        # [batches]
+        root_one_hot = jax.nn.one_hot(root_flat.astype(jnp.int32), k)  # [batches, K]
+        posterior = (cond_truthiness[:, None] * root_one_hot).sum(axis=0)  # [K]
         return _finalize_posterior(posterior, k)
 
     # Both target and condition are in free blocks
