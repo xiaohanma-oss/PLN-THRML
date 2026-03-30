@@ -3,11 +3,11 @@ metta — MeTTa thin layer for PLN thermodynamic inference
 =========================================================
 
 Registers grounded operations that bridge MeTTa PLN atoms to
-pln_thrml_beta's thrml factor graph engine.
+pln_thrml.beta's thrml factor graph engine.
 
 Usage:
     from hyperon import MeTTa
-    from metta import register_all
+    from pln_thrml.metta import register_all
 
     metta = MeTTa()
     register_all(metta)
@@ -21,6 +21,6 @@ Usage:
 Install: pip install pln-thrml[metta]
 """
 
-from metta.ops import register_all
+from pln_thrml.metta.ops import register_all
 
 __all__ = ["register_all"]

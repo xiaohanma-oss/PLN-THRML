@@ -1,6 +1,6 @@
 """
-pln_thrml_beta.py — Beta-discretized factor graphs for PLN inference
-=====================================================================
+pln_thrml.beta — Beta-discretized factor graphs for PLN inference
+==================================================================
 
 Instead of binary CategoricalNodes (True/False), each proposition's strength
 is modeled as a K-bin discrete random variable over [0,1].  The prior for

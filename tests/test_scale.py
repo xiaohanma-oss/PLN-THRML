@@ -11,7 +11,7 @@ All marked @pytest.mark.slow — run with ``pytest -m slow``.
 import time
 import pytest
 
-from pln_thrml_beta import (
+from pln_thrml.beta import (
     build_beta_chain, build_beta_full_graph, run_beta_sampling,
     estimate_beta_marginal, estimate_beta_conditional,
     diagnose_convergence, _greedy_color,

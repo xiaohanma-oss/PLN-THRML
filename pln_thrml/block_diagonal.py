@@ -22,7 +22,7 @@ from thrml.block_management import Block
 from thrml.pgm import CategoricalNode
 from thrml.models.discrete_ebm import CategoricalEBMFactor
 
-from pln_thrml_beta import (
+from pln_thrml.beta import (
     DEFAULT_K, DEFAULT_EPSILON, EPS,
     DEFAULT_BETA_N_BATCHES, DEFAULT_BETA_SCHEDULE,
     make_beta_prior_factor, make_beta_implication_factor,
@@ -482,7 +482,7 @@ def run_block_diagonal_sampling(priors, implications, similarities=None,
     damping : float
         Message damping factor for cyclic graphs (0-1).
     seed : int
-    n_batches, schedule : sampling parameters (defaults from pln_thrml_beta)
+    n_batches, schedule : sampling parameters (defaults from pln_thrml.beta)
 
     Returns
     -------

@@ -6,17 +6,19 @@ constructs a factor graph, runs sampling, and returns (strength, confidence).
 The generic factory `make_rule_op` wraps each into a grounded MeTTa operation.
 """
 
-from pln_thrml_beta import (
+from pln_thrml.beta import (
     build_beta_chain, build_beta_v_graph, build_beta_inv_v_graph,
     build_beta_symmetric_chain, sample_and_measure, DEFAULT_EPSILON,
     _assemble_free_graph, make_beta_prior_factor, DEFAULT_K,
 )
 from thrml.pgm import CategoricalNode
 from thrml.block_management import Block
-from metta.atoms import (
+from pln_thrml.metta.atoms import (
     extract_backgrounds, parse_stv_param, make_stv, make_error,
     validate_op_args,
 )
+
+__all__ = ["RULE_SPECS", "make_rule_op", "make_revision_op"]
 
 
 def _bg(metta_ref, src, dst):
@@ -185,7 +187,15 @@ def _build_beta_revision_graph(s1, c1, s2, c2, k=DEFAULT_K):
 
 
 def make_revision_op(metta_ref):
-    """Create thrml-revision! operation (dual calling convention)."""
+    """Create thrml-revision! operation with dual calling convention.
+
+    Supports two input formats:
+    - MeTTa rule format: ``(thrml-revision! (T (stv s1 c1) (stv s2 c2)))``
+    - Direct call format: ``(thrml-revision! (T s1 c1 s2 c2))``
+
+    Both produce a revised truth value by combining two independent Beta
+    priors on a single node and sampling the posterior.
+    """
 
     def thrml_revision(*atoms):
         if len(atoms) < 1:

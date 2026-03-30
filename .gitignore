@@ -25,3 +25,4 @@ docs/internal/
 .coverage
 htmlcov/
 venv/
+.mcp.json

@@ -2,11 +2,29 @@
 name = "pln-thrml"
 version = "0.2.0"
 description = "PLN inference rules compiled to thermodynamic factor graphs"
+authors = [{name = "Xiaohan Ma", email = "max257548@gmail.com"}]
+license = {text = "MIT"}
+readme = "README.md"
 requires-python = ">=3.10"
+keywords = ["PLN", "thermodynamic computing", "probabilistic logic", "factor graph", "Boltzmann machine"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
 dependencies = [
     "thrml>=0.1.3,<0.3",
     "jax>=0.4,<0.6",
 ]
+
+[project.urls]
+Homepage = "https://github.com/mafeifei666666/PLN-THRML"
+Repository = "https://github.com/mafeifei666666/PLN-THRML"
+Issues = "https://github.com/mafeifei666666/PLN-THRML/issues"
+
+[tool.setuptools.packages.find]
+include = ["pln_thrml*"]
 
 [project.optional-dependencies]
 metta = ["hyperon"]

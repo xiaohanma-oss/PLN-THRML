@@ -2,7 +2,7 @@
 
 from hyperon import OperationAtom
 
-from metta.ops.rules import RULE_SPECS, make_rule_op, make_revision_op
+from pln_thrml.metta.ops.rules import RULE_SPECS, make_rule_op, make_revision_op
 
 
 def register_all(metta):

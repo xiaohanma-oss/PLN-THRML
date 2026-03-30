@@ -3,14 +3,14 @@
 import pytest
 import jax.numpy as jnp
 
-from block_diagonal import (
+from pln_thrml.block_diagonal import (
     partition_into_blocks,
     run_block_diagonal_sampling,
     sample_and_measure_block_diagonal,
     BlockPartition,
     _kl_divergence,
 )
-from pln_thrml_beta import (
+from pln_thrml.beta import (
     build_beta_full_graph, build_beta_chain,
     run_beta_sampling, estimate_beta_marginal,
     beta_implication_weights,

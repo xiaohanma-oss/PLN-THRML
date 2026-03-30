@@ -3,7 +3,7 @@
 import pytest
 import jax.numpy as jnp
 
-from pln_thrml_beta import (
+from pln_thrml.beta import (
     c2w, w2c,
     DEFAULT_K, bin_centers, bin_width,
     stv_to_beta_params, posterior_to_stv, effective_k,
@@ -299,7 +299,7 @@ class TestQuantaleTensorProduct:
 
     def _revision_sampled(self, pairs, seed=42):
         """Build a single node with multiple Beta prior factors and sample."""
-        from pln_thrml_beta import make_beta_prior_factor, run_beta_sampling, estimate_beta_marginal
+        from pln_thrml.beta import make_beta_prior_factor, run_beta_sampling, estimate_beta_marginal
         from thrml.pgm import CategoricalNode
         from thrml.block_management import Block
         from thrml.block_sampling import BlockGibbsSpec
@@ -391,7 +391,7 @@ class TestMultiPathConsistency:
         Direct: A→C (s=0.6)
         Both should give similar P(C) when conditioned on A=high.
         """
-        from pln_thrml_beta import build_beta_chain, run_beta_sampling, estimate_beta_marginal
+        from pln_thrml.beta import build_beta_chain, run_beta_sampling, estimate_beta_marginal
 
         # Chain path: A→B→C
         chain = build_beta_chain(
@@ -428,7 +428,7 @@ class TestMultiPathConsistency:
         This validates that Q_tv ⊕ marginalization properly attenuates
         evidence through intermediate variables.
         """
-        from pln_thrml_beta import build_beta_chain, run_beta_sampling, estimate_beta_marginal
+        from pln_thrml.beta import build_beta_chain, run_beta_sampling, estimate_beta_marginal
 
         # Short chain: A→B
         short = build_beta_chain(
@@ -527,7 +527,7 @@ class TestExtremeValues:
 
     def test_extreme_modus_ponens(self):
         """Modus ponens with extreme inputs should produce valid output."""
-        from pln_thrml_beta import build_beta_chain, run_beta_sampling, estimate_beta_marginal
+        from pln_thrml.beta import build_beta_chain, run_beta_sampling, estimate_beta_marginal
 
         # Very confident premise, low strength
         graph = build_beta_chain(

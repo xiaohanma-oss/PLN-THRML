@@ -5,7 +5,7 @@ import pytest
 
 try:
     from hyperon import MeTTa
-    from metta import register_all
+    from pln_thrml.metta import register_all
     _HAS_HYPERON = True
 except ImportError:
     _HAS_HYPERON = False

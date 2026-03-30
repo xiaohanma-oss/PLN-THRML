@@ -6,7 +6,7 @@ and atom constructors (make_stv, make_error).
 """
 
 from hyperon import E, S, ValueAtom
-from pln_thrml_beta import MAX_CONFIDENCE
+from pln_thrml.beta import MAX_CONFIDENCE
 
 
 # ── Atom parsing helpers ──────────────────────────────────────────────────
