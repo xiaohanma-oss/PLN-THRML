@@ -655,13 +655,12 @@ class TestSampleAndMeasure:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  K=4/8 validation for block-diagonal architecture
+#  K=4/8 validation
 # ═══════════════════════════════════════════════════════════════════════════
 
 class TestVariableK:
     """Validate that K=4 and K=8 produce acceptable results.
 
-    Block-diagonal TSU deployment uses K=4 within blocks.
     These tests quantify accuracy degradation vs K=16 baseline.
     """
 

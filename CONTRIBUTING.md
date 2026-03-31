@@ -39,9 +39,9 @@ pytest -m slow -v                # scalability tests only (long chains, upstream
 
 ## What to contribute
 
-- New PLN rules (intensional, higher-order, temporal — see "Not yet covered" in README)
+- New PLN rules (intensional, higher-order, temporal)
 - Accuracy improvements (better Beta discretization, adaptive K)
-- Hardware deployment experiments (TSU benchmarks, block-diagonal tuning)
+- Hardware deployment experiments (TSU benchmarks)
 - Documentation and examples
 - Bug reports and fixes
 

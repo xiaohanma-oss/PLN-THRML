@@ -13,14 +13,13 @@ Usage:
     register_all(metta)
 
     metta.run('''
-        (A (stv 0.8 0.9))
-        ((Implication A B) (stv 0.9 0.85))
-        !(thrml-modus-ponens! (A B (stv 0.8 0.9) (stv 0.9 0.85)))
+        !(thrml (A (stv 0.8 0.9)) ((Implication A B) (stv 0.9 0.85)))
     ''')
+    # => (B (stv 0.72 0.55))
 
 Install: pip install pln-thrml[metta]
 """
 
-from pln_thrml.metta.ops import register_all
+from pln_thrml.metta.rules import register_all
 
 __all__ = ["register_all"]

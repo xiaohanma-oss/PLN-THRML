@@ -14,7 +14,6 @@ except ImportError:
 STRENGTH_TOL = 0.05   # beta K=16 has quantization noise
 CONFIDENCE_TOL = 0.15  # confidence from posterior is approximate
 
-# K-dependent tolerances for block-diagonal architecture validation
 STRENGTH_TOL_BY_K = {4: 0.12, 8: 0.08, 16: 0.05}
 CONFIDENCE_TOL_BY_K = {4: 0.25, 8: 0.20, 16: 0.15}
 
@@ -76,3 +75,22 @@ def parse_stv(results):
                 children = atom.get_children()
                 return float(str(children[1])), float(str(children[2]))
     raise ValueError(f"No (stv ...) found in results: {results}")
+
+
+def parse_conclusion(results):
+    """Parse (conclusion (stv s c)) from thrml unified op results.
+
+    Returns (conclusion_str, strength, confidence).
+    """
+    for batch in results:
+        for atom in batch:
+            children = atom.get_children()
+            if len(children) >= 2:
+                stv_str = str(children[-1])
+                if stv_str.startswith("(stv "):
+                    stv_children = children[-1].get_children()
+                    s = float(str(stv_children[1]))
+                    c = float(str(stv_children[2]))
+                    conclusion = str(children[0])
+                    return conclusion, s, c
+    raise ValueError(f"No (conclusion (stv ..)) found in results: {results}")
