@@ -8,10 +8,6 @@ build/
 .claude/
 CLAUDE.md
 .venv/
-docs/visualizations/
-docs/future-work/
-docs/references/
-docs/internal/
 .DS_Store
 .history/
 .vscode/
