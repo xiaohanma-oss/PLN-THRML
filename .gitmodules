@@ -1,6 +1,3 @@
 [submodule "vendor/PLN"]
 	path = vendor/PLN
 	url = https://github.com/trueagi-io/PLN.git
-[submodule "docs/references"]
-	path = docs/references
-	url = https://github.com/xiaohanma-oss/thrml-refs.git
