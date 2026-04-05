@@ -22,3 +22,5 @@ CLAUDE.md
 htmlcov/
 venv/
 .mcp.json
+.agents/
+docs/notes/

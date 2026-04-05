@@ -5,7 +5,7 @@ Contributions are welcome! This document covers the essentials.
 ## Development setup
 
 ```bash
-git clone --recurse-submodules https://github.com/mafeifei666666/PLN-THRML.git
+git clone --recurse-submodules https://github.com/xiaohanma-oss/PLN-THRML.git
 cd PLN-THRML
 pip install -e ".[dev]"          # installs thrml, jax, pytest, hyperon
 git submodule update --init      # fetch upstream PLN test baselines

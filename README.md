@@ -92,22 +92,29 @@ from the same graph — hardware performs Bayes' rule automatically. Q_logic
 
 The core task is propagating PLN truth values across a knowledge graph —
 given known premises, infer the strength and confidence of every reachable
-conclusion. On CPU, PLN runs rule-based chaining — each step applies one
-rule's formula in dependency order, so cost grows with edge count. On GPU,
-Goertzel's RAPTL-ShardZipper framework encodes logical relations as sparse
-tensors for batch contraction, scaling as O(m·s) where m is edge count and
-s is the GPU shard size. On a TSU, the knowledge graph compiles into a
-factor graph and all sampling cells update in parallel via Gibbs sampling —
-wall-clock per iteration is independent of node count (given the graph fits
-on-chip), with total time O(K_mix).¹
+conclusion. Each architecture parallelizes this differently and hits
+different bottlenecks:
 
-|           | CPU                    | GPU (estimated)              | TSU                           |
-| --------- | ---------------------- | ---------------------------- | ----------------------------- |
-| Inference | Sequential, O(edges)   | Batched parallel, O(m·s)     | All-at-once, O(K_mix)        |
+|               | CPU                  | GPU (estimated)        | TSU                              |
+| ------------- | -------------------- | ---------------------- | -------------------------------- |
+| Parallelism   | Sequential per-rule  | Batched tensor contraction | All nodes sample simultaneously |
+| Bottleneck    | Inference chain length | Communication + memory bandwidth | Mixing time (energy barrier height) |
+| Best fit      | Small graphs, exact reasoning | Large sparse graphs  | Graph topology fits on-chip¹    |
 
-¹ K_mix (mixing time) depends on graph structure and spectral gap — it is
-not a fixed constant. For graphs exceeding a single chip's L×L grid,
-multi-chip partitioning adds communication overhead.
+On CPU, PLN runs rule-based chaining — each step applies one rule's
+formula in dependency order. On GPU, Goertzel's RAPTL-ShardZipper
+framework encodes logical relations as sparse tensors for batch
+contraction. On a TSU, the knowledge graph compiles into a factor graph
+where all sampling cells update in parallel via block Gibbs sampling —
+wall-clock per iteration is independent of node count for bipartite
+graphs that fit on-chip, but total time depends on mixing time, graph
+depth, and lattice size.
+
+¹ The TSU uses an L×L grid of sampling cells with sparse local
+connectivity. Graphs exceeding a single chip require multi-chip
+partitioning with communication overhead. Mixing time (K_mix) depends on
+graph structure and spectral gap — it is not a fixed constant and can
+grow sharply for energy landscapes with tall barriers.
 
 ### Energy efficiency
 
@@ -120,7 +127,7 @@ benchmarked.
 ## Installation
 
 ```bash
-git clone --recurse-submodules https://github.com/mafeifei666666/PLN-THRML.git
+git clone --recurse-submodules https://github.com/xiaohanma-oss/PLN-THRML.git
 cd PLN-THRML
 pip install -e .                          # core only (thrml + jax)
 pip install -e ".[metta]"                 # + MeTTa bridge (requires hyperon)
@@ -278,19 +285,40 @@ moment-matching from 4 bins has less information.
 
 ## Hyperon integration outlook
 
-In Goertzel's RAPTL (Resource-Aware Probabilistic Tensor Logic) framework,
-CPU/GPU/TSU each handle what they do best:
+RAPTL (Resource-Aware Probabilistic Tensor Logic) bundles inference into
+a triple product quantale Q = Q_logic × Q_uncertainty × Q_resource.
+These three components travel together through every operation — RAPTL's
+joint optimization depends on co-locating all three so that, e.g.,
+uncertainty tolerance can inform sparse-to-dense approximation decisions
+alongside resource constraints.
 
-| Tier    | Hardware | Role                                                              |
-| ------- | -------- | ----------------------------------------------------------------- |
-| Control | CPU      | Symbolic matching, variable binding, rule scheduling (Q_logic)    |
-| Compile | GPU      | RAPTL tensor contractions, certified semantic-preserving rewrites |
-| Sample  | TSU      | Q_tv joint posterior sampling over the compiled factor graph      |
+This project explores a different architectural choice: extracting Q_tv
+(the uncertainty component) and compiling it to TSU hardware, while
+Q_logic remains on CPU/GPU. This is not what RAPTL prescribes — RAPTL
+keeps the triple bundled on GPU via ShardZipper. Our approach trades
+RAPTL's joint optimization for hardware-native sampling, and 11 PLN
+rules validate that Q_tv can be faithfully executed this way.
 
-This project supplies the Sample tier: faithful compilation from PLN rules
-to thrml factor graphs. The three tiers could in principle run as an
-asynchronous pipeline — this pipelining model is our projection, not
-described in the references.
+A possible heterogeneous pipeline extending this idea:
+
+| Tier    | Hardware | Role                                                       |
+| ------- | -------- | ---------------------------------------------------------- |
+| Control | CPU      | Variable binding, rule scheduling                          |
+| Compile | CPU+GPU  | Sparse tensor contraction, graph sharding (ShardZipper)    |
+| Sample  | TSU      | Boltzmann sampling over compiled factor graphs              |
+
+The Sample tier is more general than PLN alone — any algorithm reducible
+to sampling from P(x) ∝ e^{−ℰ(x)} is a candidate. Current status:
+
+| Algorithm                  | TSU status                                        |
+| -------------------------- | ------------------------------------------------- |
+| PLN truth-value inference  | **Validated** — 11 rules, this project            |
+| Factor-graph BP (general)  | Native — Gibbs sampling implements message passing |
+| MOSES / EDA program search | Plausible — EDA sampling step fits, not yet tested |
+
+The three-tier pipeline is our projection, not described in the
+references. Whether the gain from hardware-native sampling outweighs the
+loss of RAPTL's joint optimization is an open question.
 
 ## Project structure
 
@@ -300,14 +328,15 @@ pln_thrml/                 Main package
   beta.py                  Beta factor graph engine (builds, samples, recovers stv)
   metta/                   MeTTa integration layer (optional, requires hyperon)
     __init__.py            Entry point — exports register_all()
-    rules.py               Unified thrml operator + 11 rule builders + atom helpers
+    dispatch.metta         MeTTa dispatch rules — pattern-matching rule selection
+    rules.py               Grounded ops (10 rule builders) + atom helpers
     declarations/
       pln_types.metta      Type declarations (stv, Implication, Similarity, etc.)
 vendor/PLN/                trueagi-io/PLN (git submodule) — test baselines
 tests/
   conftest.py              Shared fixtures and tolerance constants (strength ±0.05, confidence ±0.15)
   test_factor_graph.py     Factor graph engine unit tests (K=4/8/16 parametrized)
-  test_metta.py            All rules verified end-to-end via MeTTa
+  test_metta.py            MeTTa end-to-end: 11 rules + quantale algebra + topologies + extreme inputs
   test_scale.py            Scalability tests from trueagi-io/PLN examples (pytest -m slow)
 docs/
   results.md               Full per-rule results tables
