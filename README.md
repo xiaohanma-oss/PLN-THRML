@@ -29,8 +29,6 @@ that run on thermodynamic hardware. You give it PLN premises with truth
 values; it builds a Boltzmann energy model, runs Gibbs sampling, and returns
 inferred truth values. 11 PLN rules are implemented and verified end-to-end.
 
-> **Interactive overview**: Open [`docs/interactive_overview.html`](docs/interactive_overview.html) in your browser for a visual walkthrough — pipeline, all 11 rule topologies, and the energy mapping.
-
 <details>
 <summary><strong>New to PLN? (30-second primer)</strong></summary>
 
@@ -197,7 +195,8 @@ pytest -m slow -v                        # scalability tests (trueagi-io/PLN exa
 4. **Sample** — Block Gibbs sampling (50 batches × 2,000 samples). Root nodes can be **clamped** (fixed to their prior values as known evidence) while free nodes are updated by Gibbs sweeps.
 5. **Recover** — moment-match the posterior histogram → `(strength, confidence)`
 
-See [docs/beta-discretization.md](docs/beta-discretization.md) for details.
+The Beta-to-energy compilation preserves both strength (bin position) and
+confidence (bin sharpness) through discretization.
 
 | PLN concept                       | thrml construct                             | Extropic hardware               |
 | --------------------------------- | ------------------------------------------- | ------------------------------- |
@@ -250,7 +249,7 @@ see [Quick start](#quick-start) for examples of all supported input forms.
 
 11 PLN rules compiled and verified (K=16, 100,000 samples). Strength errors
 for representative parameter sets
-(full per-parameter breakdown in [docs/results.md](docs/results.md)):
+(representative parameter sets):
 
 | Rule              | Max Error | Rule              | Max Error |
 | ----------------- | --------- | ----------------- | --------- |
@@ -264,8 +263,6 @@ for representative parameter sets
 Most rules match within 5%. Abduction/Induction diverge because PLN uses
 closed-form approximations while the factor graph computes the exact joint
 posterior. Inversion gives exact Bayesian P(A|B) vs PLN's heuristic.
-
-Full per-rule tables and divergence analysis: [docs/results.md](docs/results.md)
 
 ### Effect of K on accuracy
 
@@ -338,11 +335,6 @@ tests/
   test_factor_graph.py     Factor graph engine unit tests (K=4/8/16 parametrized)
   test_metta.py            MeTTa end-to-end: 11 rules + quantale algebra + topologies + extreme inputs
   test_scale.py            Scalability tests from trueagi-io/PLN examples (pytest -m slow)
-docs/
-  results.md               Full per-rule results tables
-  pln-formulas.md          PLN truth-value confidence formulas
-  beta-discretization.md   Beta-discretized approach details
-  interactive_overview.html  Interactive visualisation (3 tabs: pipeline, 11 rules, energy)
 ```
 
 ## Contributing
