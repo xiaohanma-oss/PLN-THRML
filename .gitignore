@@ -24,3 +24,6 @@ venv/
 .mcp.json
 .agents/
 docs/notes/
+docs/internal/
+docs/future-work/
+docs/visualizations/
