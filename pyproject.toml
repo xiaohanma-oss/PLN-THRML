@@ -32,6 +32,7 @@ include = ["pln_thrml*"]
 
 [project.optional-dependencies]
 metta = ["hyperon"]
+geodesic = ["geodesic-thrml>=0.1.0"]
 dev = ["pytest", "hyperon"]
 
 [tool.pytest.ini_options]

@@ -227,6 +227,51 @@ def _make_revision_op(metta_ref):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+#  Premise parsing (for geodesic selection)
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _atoms_to_premises(atoms):
+    """Parse MeTTa atoms into premise dicts for selection.py.
+
+    Accepts atoms like:
+        (A (stv 0.8 0.9))                → atom premise
+        ((Implication A B) (stv 0.9 0.8)) → link premise
+    """
+    premises = []
+    for atom in atoms:
+        children = atom.get_children()
+        if len(children) < 2:
+            continue
+        subject = children[0]
+        stv_atom = children[1]
+        stv_children = stv_atom.get_children()
+        if len(stv_children) < 3 or str(stv_children[0]) != "stv":
+            continue
+        s = float(str(stv_children[1]))
+        c = float(str(stv_children[2]))
+
+        subject_children = subject.get_children() if hasattr(subject, 'get_children') else []
+        if len(subject_children) >= 3:
+            # Link: (LinkType Source Target)
+            premises.append({
+                "atom": str(subject),
+                "strength": s,
+                "confidence": c,
+                "link_type": str(subject_children[0]),
+                "source": str(subject_children[1]),
+                "target": str(subject_children[2]),
+            })
+        else:
+            # Plain atom
+            premises.append({
+                "atom": str(subject),
+                "strength": s,
+                "confidence": c,
+            })
+    return premises
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 #  Registration
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -254,6 +299,25 @@ def register_all(metta):
     }
     for name, fn in ops.items():
         metta.register_atom(name, OperationAtom(name, fn, unwrap=False))
+
+    # Register geodesic-selected inference (optional — only if geodesic installed)
+    try:
+        from geodesic_thrml.controller_thrml import select_step_thrml  # noqa: F401
+        from pln_thrml.selection import select_and_apply
+
+        def _geodesic_select_op(*args):
+            """Grounded op: select best rule via geodesic controller."""
+            # Parse MeTTa atoms into premise dicts
+            premises = _atoms_to_premises(args)
+            result = select_and_apply(premises)
+            if result is None:
+                return []
+            return [make_stv(result["strength"], result["confidence"])]
+
+        metta.register_atom("select-thrml",
+            OperationAtom("select-thrml", _geodesic_select_op, unwrap=False))
+    except ImportError:
+        pass  # geodesic-thrml not installed, skip
 
     # Load type declarations and dispatch rules
     _load_metta_file(metta, "declarations/pln_types.metta")

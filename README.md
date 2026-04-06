@@ -130,6 +130,7 @@ cd PLN-THRML
 pip install -e .                          # core only (thrml + jax)
 pip install -e ".[metta]"                 # + MeTTa bridge (requires hyperon)
 pip install -e ".[dev]"                   # + pytest for running tests
+pip install -e ".[geodesic]"              # + Geodesic-THRML step selection
 ```
 
 > The [trueagi-io/PLN](https://github.com/trueagi-io/PLN) submodule provides
@@ -179,6 +180,33 @@ results = metta.run('''
 
 > The input structure determines the rule automatically — no need to
 > remember individual rule names or argument orders.
+
+### Geodesic rule selection (requires `geodesic-thrml`)
+
+When multiple rules apply to the same premises, `select_and_apply()` uses
+[Geodesic-THRML](https://github.com/xiaohanma-oss/Geodesic-THRML)'s THRML
+Boltzmann controller to pick the best one:
+
+```python
+from pln_thrml.selection import select_and_apply
+
+result = select_and_apply(
+    premises=[
+        {"atom": "A", "strength": 0.8, "confidence": 0.9},
+        {"atom": "(Implication A B)", "strength": 0.9, "confidence": 0.85,
+         "link_type": "Implication", "source": "A", "target": "B"},
+    ],
+    goal_stv=(0.9, 0.9),  # optional: bias toward this goal
+    temperature=1.0,       # T>0 explores, T→0 picks deterministically
+)
+
+print(result["name"])        # e.g., "modus-ponens"
+print(result["strength"])    # inferred strength
+print(result["selection"])   # diagnostics: rule_probs, energy, rho
+```
+
+Without `geodesic-thrml` installed, PLN-THRML works normally — all matching
+rules fire as before. The selection layer is opt-in.
 
 ### Run tests
 
@@ -342,10 +370,22 @@ tests/
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, testing, code
 conventions, and pull request guidelines.
 
+## Sister Projects
+
+Five projects compiling Hyperon's cognitive architecture to thermodynamic hardware:
+
+| Project | What it compiles |
+|---------|-----------------|
+| **[PLN-THRML](https://github.com/xiaohanma-oss/PLN-THRML)** | **Probabilistic inference → Boltzmann energy tables** |
+| [ECAN-THRML](https://github.com/xiaohanma-oss/ECAN-THRML) | Attention diffusion → Lattice Boltzmann simulation |
+| [MOSES-THRML](https://github.com/xiaohanma-oss/MOSES-THRML) | Program evolution → Boltzmann sampling |
+| [QuantiMORK-THRML](https://github.com/xiaohanma-oss/QuantiMORK-THRML) | Predictive coding → wavelet-sparse factor graphs |
+| [Geodesic-THRML](https://github.com/xiaohanma-oss/Geodesic-THRML) | Unified geodesic scheduler for all above |
+
 ## Acknowledgements
 
-- [Hyperon/PLN](https://github.com/trueagi-io/PLN) — TrueAGI team
-- [thrml](https://github.com/extropic-ai/thrml) — Extropic AI
+- [Hyperon/PLN](https://github.com/trueagi-io/PLN) — TrueAGI
+- [thrml](https://github.com/extropic-ai/thrml) — Extropic AI factor graph library
 
 ## License
 
