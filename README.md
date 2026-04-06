@@ -108,11 +108,9 @@ wall-clock per iteration is independent of node count for bipartite
 graphs that fit on-chip, but total time depends on mixing time, graph
 depth, and lattice size.
 
-¹ The TSU uses an L×L grid of sampling cells with sparse local
-connectivity. Graphs exceeding a single chip require multi-chip
-partitioning with communication overhead. Mixing time (K_mix) depends on
-graph structure and spectral gap — it is not a fixed constant and can
-grow sharply for energy landscapes with tall barriers.
+¹ Graphs exceeding a single TSU chip require multi-chip partitioning
+with communication overhead. Mixing time depends on graph structure and
+can grow sharply for landscapes with tall energy barriers.
 
 ### Energy efficiency
 
