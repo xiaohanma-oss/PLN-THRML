@@ -216,7 +216,7 @@ pytest -m slow -v                        # scalability tests (trueagi-io/PLN exa
 ## How it works
 
 1. **Parameterize** — PLN `(stv s c)` → Beta(α, β) with mean = s
-2. **Discretize** — discretize each Beta distribution into **K bins** (`CategoricalNode`). K controls accuracy vs compute: K=16 (default) for research, K=4 for TSU hardware deployment.
+2. **Discretize** — discretize each Beta distribution into **K bins** (`CategoricalNode`). Higher K → better accuracy; lower K → faster sampling.
 3. **Build graph** — each implication becomes a K×K weight table (log of the discretized conditional Beta); assemble all nodes and factors into a factor graph.
 4. **Sample** — Block Gibbs sampling (50 batches × 2,000 samples). Root nodes can be **clamped** (fixed to their prior values as known evidence) while free nodes are updated by Gibbs sweeps.
 5. **Recover** — moment-match the posterior histogram → `(strength, confidence)`
@@ -226,7 +226,7 @@ confidence (bin sharpness) through discretization.
 
 | PLN concept                       | thrml construct                             | Extropic hardware               |
 | --------------------------------- | ------------------------------------------- | ------------------------------- |
-| Proposition (VariableAtom)        | `CategoricalNode` (K=16 bins)               | pdit (K-category sampling cell) |
+| Proposition (VariableAtom)        | `CategoricalNode` (K bins)                  | pdit (K-category sampling cell) |
 | Prior P(A)                        | Unary `CategoricalEBMFactor` (Beta prior)   | Bias field on pdit              |
 | Implication A→B (strength s)      | Pairwise `SquareCategoricalEBMFactor` (K×K) | Coupling between pdits          |
 | TruthValue (strength, confidence) | Beta posterior → moment-matching            | Posterior distribution readout  |
@@ -315,12 +315,10 @@ joint optimization depends on co-locating all three so that, e.g.,
 uncertainty tolerance can inform sparse-to-dense approximation decisions
 alongside resource constraints.
 
-This project explores a different architectural choice: extracting Q_tv
-(the uncertainty component) and compiling it to TSU hardware, while
-Q_logic remains on CPU/GPU. This is not what RAPTL prescribes — RAPTL
-keeps the triple bundled on GPU via ShardZipper. Our approach trades
-RAPTL's joint optimization for hardware-native sampling, and 11 PLN
-rules validate that Q_tv can be faithfully executed this way.
+This project takes a different approach: extract Q_tv and compile it to
+TSU hardware, keeping Q_logic on CPU/GPU. This trades RAPTL's joint
+optimization for hardware-native sampling — 11 PLN rules validate that
+Q_tv executes faithfully this way.
 
 A possible heterogeneous pipeline extending this idea:
 
@@ -331,13 +329,7 @@ A possible heterogeneous pipeline extending this idea:
 | Sample  | TSU      | Boltzmann sampling over compiled factor graphs              |
 
 The Sample tier is more general than PLN alone — any algorithm reducible
-to sampling from P(x) ∝ e^{−ℰ(x)} is a candidate. Current status:
-
-| Algorithm                  | TSU status                                        |
-| -------------------------- | ------------------------------------------------- |
-| PLN truth-value inference  | **Validated** — 11 rules, this project            |
-| Factor-graph BP (general)  | Native — Gibbs sampling implements message passing |
-| MOSES / EDA program search | Plausible — EDA sampling step fits, not yet tested |
+to sampling from P(x) ∝ e^{−ℰ(x)} is a candidate (see [Sister Projects](#sister-projects)).
 
 The three-tier pipeline is our projection, not described in the
 references. Whether the gain from hardware-native sampling outweighs the
