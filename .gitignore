@@ -23,4 +23,7 @@ htmlcov/
 venv/
 .mcp.json
 .agents/
+eidos/
+memory/
+.eidos-config.yaml
 docs/
