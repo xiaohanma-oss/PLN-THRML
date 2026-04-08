@@ -181,6 +181,7 @@ def _enumerate_candidates(
                 src, dst = link["source"], link["target"]
 
                 # Symmetric Modus Ponens: A, A~B ⊢ B
+                # Symmetric link background: higher similarity → higher base rate
                 bg_val = 0.2 * (1.0 + link["strength"])
                 c = _try_rule(
                     "symmetric-mp",

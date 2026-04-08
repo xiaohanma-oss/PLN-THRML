@@ -48,8 +48,12 @@ def extract_backgrounds(metta):
     bgs = {}
     for atom in results[0]:
         children = atom.get_children()
+        if len(children) < 2:
+            continue
         link_atom = children[0]
         link_children = link_atom.get_children()
+        if len(link_children) < 3:
+            continue
         bgs[(str(link_children[1]), str(link_children[2]))] = _float_from_atom(children[1])
     return bgs
 
@@ -202,6 +206,7 @@ def _make_symmetric_mp_op(metta_ref):
     def op(src_atom, dst_atom, s1, c1, s2, c2):
         s_A, c_A = _clamp_sc(s1, c1)
         s_AB, c_AB = _clamp_sc(s2, c2)
+        # Symmetric link background: higher similarity → higher base rate
         bg = 0.2 * (1.0 + s_AB)
         graph = build_beta_chain(
             priors=[s_A, 0.5], confidences=[c_A, 0.01],

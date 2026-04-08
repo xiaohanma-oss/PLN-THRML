@@ -552,9 +552,9 @@ def run_beta_sampling(graph, seed=42, n_batches=None, schedule=None):
             subkey, graph["root_logits"], shape=(n_batches, 1)
         ).astype(jnp.uint8)
         state_clamp = [root_state]
-        graph["_root_clamped_states"] = root_state
     else:
         state_clamp = []
+        root_state = None
 
     # Initialize free blocks randomly
     init_state = []
@@ -577,6 +577,8 @@ def run_beta_sampling(graph, seed=42, n_batches=None, schedule=None):
             lambda s, k_: sample_states(k_, prog, schedule, s, [], observe_blocks)
         ))(init_state, keys)
 
+    if root_state is not None:
+        return {"block_samples": samples, "root_clamped_states": root_state, "k": k}
     return samples
 
 
@@ -617,12 +619,13 @@ def diagnose_convergence(samples, graph, node):
         n_total = samples["root_samples"].size
         return {"r_hat": 1.0, "ess": int(n_total), "converged": True}
 
+    block_samples, _ = _unpack_samples(samples)
     bi, ni = _node_location(graph, node)
     k = graph.get("k", DEFAULT_K)
     centers = bin_centers(k)
 
     # raw shape: [n_batches, n_samples, n_nodes_in_block]
-    raw = samples[bi][:, :, ni]  # [n_batches, n_samples]
+    raw = block_samples[bi][:, :, ni]  # [n_batches, n_samples]
     n_batches, n_samples = raw.shape
 
     # Convert categorical bins to continuous values for R-hat
@@ -706,6 +709,21 @@ def _build_histogram(flat_samples, k):
     return counts / jnp.sum(counts)
 
 
+def _unpack_samples(samples):
+    """Extract block samples and optional root_clamped_states from samples.
+
+    Handles both formats:
+    - list of arrays (all-free graphs): returns (samples, None)
+    - dict with "block_samples" (clamped root): returns (block_samples, root_states)
+    - dict with "root_samples" (single-node): returns (None, None) — caller handles
+    """
+    if isinstance(samples, dict):
+        if "root_samples" in samples:
+            return None, None
+        return samples["block_samples"], samples.get("root_clamped_states")
+    return samples, None
+
+
 def estimate_beta_marginal(samples, graph, node, k=None):
     """Posterior histogram and (strength, confidence) for a single node.
 
@@ -721,8 +739,9 @@ def estimate_beta_marginal(samples, graph, node, k=None):
         strength, confidence = posterior_to_stv(posterior, k)
         return posterior, strength, confidence
 
+    block_samples, _ = _unpack_samples(samples)
     bi, ni = _node_location(graph, node)
-    flat = _flatten_node(samples, bi, ni)
+    flat = _flatten_node(block_samples, bi, ni)
     posterior = _build_histogram(flat, k)
     strength, confidence = posterior_to_stv(posterior, k)
     return posterior, strength, confidence
@@ -770,12 +789,13 @@ def estimate_beta_conditional(samples, graph, target, condition, k=None):
     cond_is_clamped = _is_clamped_root(graph, condition)
     target_is_clamped = _is_clamped_root(graph, target)
 
+    block_samples, root_clamped = _unpack_samples(samples)
+
     def _get_root_states():
-        root_states = graph.get("_root_clamped_states")
-        if root_states is None:
+        if root_clamped is None:
             raise ValueError("Root clamped states not available. "
-                             "Use run_beta_sampling which stores them.")
-        return root_states[:, 0]  # [n_batches]
+                             "Use run_beta_sampling with a clamped-root graph.")
+        return root_clamped[:, 0]  # [n_batches]
 
     if target_is_clamped and cond_is_clamped:
         raise ValueError("Cannot condition clamped root on itself")
@@ -784,7 +804,7 @@ def estimate_beta_conditional(samples, graph, target, condition, k=None):
 
     if cond_is_clamped:
         tbi, tni = _node_location(graph, target)
-        t_raw = samples[tbi][:, :, tni]
+        t_raw = block_samples[tbi][:, :, tni]
         root_flat = _get_root_states()
         root_weights = centers[root_flat]
 
@@ -795,7 +815,7 @@ def estimate_beta_conditional(samples, graph, target, condition, k=None):
 
     if target_is_clamped:
         cbi, cni = _node_location(graph, condition)
-        c_raw = samples[cbi][:, :, cni]
+        c_raw = block_samples[cbi][:, :, cni]
         root_flat = _get_root_states()
 
         cond_truthiness = jnp.mean(centers[c_raw], axis=1)        # [batches]
@@ -806,8 +826,8 @@ def estimate_beta_conditional(samples, graph, target, condition, k=None):
     # Both target and condition are in free blocks
     tbi, tni = _node_location(graph, target)
     cbi, cni = _node_location(graph, condition)
-    t_flat = _flatten_node(samples, tbi, tni)
-    c_flat = _flatten_node(samples, cbi, cni)
+    t_flat = _flatten_node(block_samples, tbi, tni)
+    c_flat = _flatten_node(block_samples, cbi, cni)
 
     posterior = _weighted_histogram(
         t_flat.astype(jnp.int32), c_flat.astype(jnp.int32), k)
