@@ -35,7 +35,7 @@ __all__ = [
     "DEFAULT_BETA_N_BATCHES", "DEFAULT_BETA_SCHEDULE",
     # Conversion
     "c2w", "w2c", "bin_centers", "bin_width",
-    "stv_to_beta_params", "posterior_to_stv", "effective_k",
+    "stv_to_beta_params", "posterior_to_stv",
     # Weights & factors
     "beta_prior_weights", "beta_implication_weights",
     "make_beta_prior_factor", "make_beta_implication_factor",
@@ -143,17 +143,6 @@ def posterior_to_stv(posterior, k=DEFAULT_K):
     return strength, w2c(w_eff)
 
 
-def effective_k(confidence):
-    """Choose bin count based on confidence level.
-
-    Higher confidence means sharper Beta distribution, needing more bins
-    to capture the peak accurately.
-    """
-    if confidence >= 0.9:
-        return 64
-    if confidence >= 0.7:
-        return 32
-    return DEFAULT_K
 
 
 # ═══════════════════════════════════════════════════════════════════════════

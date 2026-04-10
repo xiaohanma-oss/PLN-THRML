@@ -76,13 +76,14 @@ log-probabilities become energy weights directly.
 
 </details>
 
-**Technical summary**: All Q_tv operations in the PLN product quantale
-(⊗ evidence combination at factors, ⊕ marginalization at variables) compile
-faithfully to Boltzmann energy weights and recover correct inference results
-from thermodynamic sampling. 11 rules × multiple parameter sets constitute
-the end-to-end evidence. Gibbs sampling recovers both P(B|A) and P(A|B)
-from the same graph — hardware performs Bayes' rule automatically. Q_logic
-(rule selection, structure discovery) remains on CPU/GPU.
+**Technical summary**: PLN truth values compile to Boltzmann energy
+weights via `P(x) ∝ e^{−ℰ(x)}` (take the negative log of each
+probability to get the energy), and Gibbs sampling over the
+resulting factor graph recovers correct inference results — including
+both P(B|A) and P(A|B) from the same graph (hardware performs Bayes'
+rule automatically). 11 rules × multiple parameter sets constitute the
+end-to-end evidence. Rule selection and structure discovery remain on
+CPU/GPU.
 
 ## Why this matters
 
@@ -111,6 +112,19 @@ depth, and lattice size.
 ¹ Graphs exceeding a single TSU chip require multi-chip partitioning
 with communication overhead. Mixing time depends on graph structure and
 can grow sharply for landscapes with tall energy barriers.
+
+### Inference accuracy
+
+PLN's rule formulas operate on point estimates — they plug strength
+values into algebraic expressions that assume independence or use
+heuristic simplifications. PLN-THRML instead discretizes each truth
+value into a K-bin Beta distribution and lets the factor graph compute
+the exact joint posterior via Gibbs sampling, preserving the full
+distributional shape. The [Results](#results) table shows this
+concretely — abduction and induction diverge from PLN's formulas not
+because the factor graph is inaccurate, but because the point-estimate
+formulas lose information. Inversion gives exact Bayesian P(A|B) where
+PLN uses a heuristic with a fixed 0.6 confidence discount.
 
 ### Energy efficiency
 
@@ -260,7 +274,7 @@ confidence (bin sharpness) through discretization.
 | `estimate_beta_conditional(samples, graph, target, condition)` | P(target \| condition=True) via weighted posterior |
 | `diagnose_convergence(samples, graph, node)` | R-hat, ESS, and convergence diagnostics |
 
-**Conversion utilities**: `stv_to_beta_params(s, c)`, `posterior_to_stv(histogram, k)`, `c2w(c)` / `w2c(w)`, `bin_centers(k)`, `effective_k(c)`.
+**Conversion utilities**: `stv_to_beta_params(s, c)`, `posterior_to_stv(histogram, k)`, `c2w(c)` / `w2c(w)`, `bin_centers(k)`.
 
 ### MeTTa bridge (`pln_thrml.metta`)
 

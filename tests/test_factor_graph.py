@@ -6,7 +6,7 @@ import jax.numpy as jnp
 from pln_thrml.beta import (
     c2w, w2c,
     DEFAULT_K, bin_centers, bin_width,
-    stv_to_beta_params, posterior_to_stv, effective_k,
+    stv_to_beta_params, posterior_to_stv,
     beta_prior_weights, beta_implication_weights,
     build_beta_chain, build_beta_full_graph, run_beta_sampling,
     estimate_beta_marginal, estimate_beta_conditional,
@@ -103,7 +103,7 @@ class TestPosteriorToStv:
         0 or 1).  These cases use relaxed tolerances.
         """
         from jax.scipy.stats import beta as beta_dist
-        k = effective_k(c_in)
+        k = DEFAULT_K
         alpha, beta_param = stv_to_beta_params(s_in, c_in)
         centers = bin_centers(k)
         posterior = beta_dist.pdf(centers, alpha, beta_param)
@@ -120,16 +120,6 @@ class TestPosteriorToStv:
         assert c_out == pytest.approx(c_in, abs=c_tol), \
             f"confidence roundtrip failed: {c_in} -> {c_out} (alpha={alpha:.2f}, beta={beta_param:.2f})"
 
-
-class TestEffectiveK:
-    def test_low_confidence(self):
-        assert effective_k(0.3) == DEFAULT_K
-
-    def test_medium_confidence(self):
-        assert effective_k(0.75) == 32
-
-    def test_high_confidence(self):
-        assert effective_k(0.95) == 64
 
 
 class TestWeights:
