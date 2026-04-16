@@ -40,12 +40,9 @@ __all__ = [
     "beta_prior_weights", "beta_implication_weights",
     "make_beta_prior_factor", "make_beta_implication_factor",
     # Graph builders
-    "build_beta_chain", "build_beta_full_graph",
-    "build_beta_v_graph", "build_beta_inv_v_graph",
-    "build_beta_symmetric_chain",
+    "build_beta_chain", "build_beta_inv_v_graph",
     # Sampling & measurement
     "run_beta_sampling", "sample_and_measure",
-    "diagnose_convergence",
     "estimate_beta_marginal", "estimate_beta_conditional",
 ]
 
@@ -227,27 +224,6 @@ def make_beta_implication_factor(parent, child, strength, confidence,
 #  Graph builders
 # ═══════════════════════════════════════════════════════════════════════════
 
-def _greedy_color(names, adjacency):
-    """Greedy graph coloring: partition nodes into independent groups.
-
-    Returns a list of groups where no two nodes within a group are adjacent.
-    """
-    color_of = {}
-    for name in names:
-        neighbor_colors = {color_of[nb] for nb in adjacency.get(name, set())
-                           if nb in color_of}
-        c = 0
-        while c in neighbor_colors:
-            c += 1
-        color_of[name] = c
-
-    n_colors = max(color_of.values(), default=-1) + 1
-    groups = [[] for _ in range(n_colors)]
-    for name in names:
-        groups[color_of[name]].append(name)
-    return groups
-
-
 def _assemble_free_graph(nodes, factors, free_blocks, k=DEFAULT_K, **extra):
     """Assemble a fully free (no clamp) factor graph into a sampling program."""
     spec = BlockGibbsSpec(free_blocks, [])
@@ -339,24 +315,6 @@ def _build_three_node_graph(node_priors, edges, k=DEFAULT_K, **labels):
     return _assemble_free_graph(nodes, factors, free_blocks, k, **labels)
 
 
-def build_beta_v_graph(root_prior, root_confidence,
-                       left_strength, right_strength,
-                       left_impl_confidence, right_impl_confidence,
-                       left_background, right_background,
-                       left_prior=0.5, left_confidence=0.01,
-                       right_prior=0.5, right_confidence=0.01,
-                       k=DEFAULT_K):
-    """V-shape: Left ← Root → Right (induction). Nodes order: [left, root, right]."""
-    g = _build_three_node_graph(
-        [(left_prior, left_confidence), (root_prior, root_confidence),
-         (right_prior, right_confidence)],
-        [(1, 0, left_strength, left_impl_confidence, left_background),
-         (1, 2, right_strength, right_impl_confidence, right_background)],
-        k, root=None, left=None, right=None)
-    g["root"], g["left"], g["right"] = g["nodes"][1], g["nodes"][0], g["nodes"][2]
-    return g
-
-
 def build_beta_inv_v_graph(left_prior, left_confidence,
                            right_prior, right_confidence,
                            left_strength, right_strength,
@@ -373,133 +331,6 @@ def build_beta_inv_v_graph(left_prior, left_confidence,
         k, left=None, center=None, right=None)
     g["left"], g["center"], g["right"] = g["nodes"][0], g["nodes"][1], g["nodes"][2]
     return g
-
-
-def build_beta_symmetric_chain(priors, confidences, strengths, impl_confidences,
-                               backgrounds, k=DEFAULT_K):
-    """Symmetric chain  X_0 ↔ X_1 ↔ ... ↔ X_{n-1}  with K-bin nodes.
-
-    Each edge has bidirectional coupling.  All nodes get Beta priors.
-    All nodes are free (no clamping).
-
-    Returns dict with keys: nodes, factors, free_blocks, spec, program, n, k
-    """
-    n = len(priors)
-    nodes = [CategoricalNode() for _ in range(n)]
-
-    factors = []
-    for i in range(n):
-        factors.append(make_beta_prior_factor(nodes[i], priors[i], confidences[i], k))
-
-    for i in range(n - 1):
-        factors.append(make_beta_implication_factor(
-            nodes[i], nodes[i + 1],
-            strengths[i], impl_confidences[i], backgrounds[i], k))
-        factors.append(make_beta_implication_factor(
-            nodes[i + 1], nodes[i],
-            strengths[i], impl_confidences[i], backgrounds[i], k))
-
-    # 2-coloring: even indices / odd indices
-    even = [nodes[i] for i in range(0, n, 2)]
-    odd = [nodes[i] for i in range(1, n, 2)]
-    free_blocks = [Block(even), Block(odd)] if odd else [Block(even)]
-    return _assemble_free_graph(nodes, factors, free_blocks, k, n=n)
-
-
-def build_beta_full_graph(priors, implications, similarities=None,
-                          equivalences=None, backgrounds=None,
-                          negated_implications=None, k=DEFAULT_K):
-    """Compile an entire knowledge base into one beta factor graph.
-
-    All nodes are free (no clamping).  Single-node-per-block for arbitrary
-    topologies.
-
-    Parameters
-    ----------
-    priors : dict[str, {"strength": float, "confidence": float}]
-    implications : list[{"src", "dst", "strength", "confidence"}]
-    similarities : list[{"src", "dst", "strength", "confidence"}] | None
-    equivalences : list[{"src", "dst", "strength", "confidence"}] | None
-    backgrounds : dict[(str, str), float] | None
-    negated_implications : list[{"src", "dst", "strength", "confidence"}] | None
-        Implication(A, Not(B)) — compiled as Implication(A, B) with
-        strength flipped to 1-strength.
-    """
-    similarities = similarities or []
-    equivalences = equivalences or []
-    backgrounds = backgrounds or {}
-    negated_implications = negated_implications or []
-
-    # Collect all node names
-    names: set[str] = set(priors.keys())
-    for link in implications + negated_implications:
-        names.add(link["src"])
-        names.add(link["dst"])
-    for link in similarities + equivalences:
-        names.add(link["src"])
-        names.add(link["dst"])
-
-    name_to_node = {name: CategoricalNode() for name in sorted(names)}
-
-    # Build factors
-    factors = []
-
-    # Priors
-    for name, node in name_to_node.items():
-        p = priors.get(name)
-        s = p["strength"] if p else 0.5
-        c = p["confidence"] if p else 0.01
-        factors.append(make_beta_prior_factor(node, s, c, k))
-
-    # Directed links
-    for link in implications:
-        parent = name_to_node[link["src"]]
-        child = name_to_node[link["dst"]]
-        bg = backgrounds.get((link["src"], link["dst"]), DEFAULT_EPSILON)
-        factors.append(make_beta_implication_factor(
-            parent, child, link["strength"], link["confidence"], bg, k))
-
-    # Negated implications: Implication(A, Not(B)) → strength flipped
-    for link in negated_implications:
-        parent = name_to_node[link["src"]]
-        child = name_to_node[link["dst"]]
-        bg = backgrounds.get((link["src"], link["dst"]), DEFAULT_EPSILON)
-        factors.append(make_beta_implication_factor(
-            parent, child, 1.0 - link["strength"], link["confidence"], bg, k))
-
-    # Symmetric links → bidirectional
-    for link in similarities + equivalences:
-        a = name_to_node[link["src"]]
-        b = name_to_node[link["dst"]]
-        bg = backgrounds.get((link["src"], link["dst"]), DEFAULT_EPSILON)
-        factors.append(make_beta_implication_factor(
-            a, b, link["strength"], link["confidence"], bg, k))
-        factors.append(make_beta_implication_factor(
-            b, a, link["strength"], link["confidence"], bg, k))
-
-    # Color graph so non-adjacent nodes share a block
-    sorted_names = sorted(name_to_node.keys())
-    adjacency = {n: set() for n in sorted_names}
-    for link in implications + negated_implications:
-        adjacency[link["src"]].add(link["dst"])
-        adjacency[link["dst"]].add(link["src"])
-    for link in similarities + equivalences:
-        adjacency[link["src"]].add(link["dst"])
-        adjacency[link["dst"]].add(link["src"])
-
-    groups = _greedy_color(sorted_names, adjacency)
-    free_blocks = [Block([name_to_node[n] for n in grp]) for grp in groups]
-    spec = BlockGibbsSpec(free_blocks, [])
-    samplers = [CategoricalGibbsConditional(n_categories=k) for _ in free_blocks]
-
-    prog = FactorSamplingProgram(
-        gibbs_spec=spec,
-        samplers=samplers,
-        factors=factors,
-        other_interaction_groups=[],
-    )
-    return dict(nodes=name_to_node, factors=factors, free_blocks=free_blocks,
-                clamped_blocks=[], spec=spec, program=prog, k=k, single_node=False)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -579,99 +410,6 @@ def sample_and_measure(graph, target_node, seed=42):
     samples = run_beta_sampling(graph, seed=seed)
     _, strength, confidence = estimate_beta_marginal(samples, graph, target_node)
     return strength, confidence
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-#  Convergence diagnostics
-# ═══════════════════════════════════════════════════════════════════════════
-
-def diagnose_convergence(samples, graph, node):
-    """Compute convergence diagnostics for a node's samples.
-
-    Uses batches as independent chains to compute split-R-hat and ESS.
-
-    Parameters
-    ----------
-    samples : raw samples from run_beta_sampling
-    graph : factor graph dict
-    node : target CategoricalNode
-
-    Returns
-    -------
-    dict with keys:
-        r_hat : float — split-R-hat statistic (< 1.05 is good)
-        ess : int — effective sample size
-        converged : bool — True if R-hat < 1.05 and ESS > 400
-    """
-    if isinstance(samples, dict) and "root_samples" in samples:
-        # Single-node graph: samples drawn directly from prior, always converged
-        n_total = samples["root_samples"].size
-        return {"r_hat": 1.0, "ess": int(n_total), "converged": True}
-
-    block_samples, _ = _unpack_samples(samples)
-    bi, ni = _node_location(graph, node)
-    k = graph.get("k", DEFAULT_K)
-    centers = bin_centers(k)
-
-    # raw shape: [n_batches, n_samples, n_nodes_in_block]
-    raw = block_samples[bi][:, :, ni]  # [n_batches, n_samples]
-    n_batches, n_samples = raw.shape
-
-    # Convert categorical bins to continuous values for R-hat
-    values = centers[raw]  # [n_batches, n_samples]
-
-    # --- Split-R-hat ---
-    # Split each chain (batch) in half
-    half = n_samples // 2
-    first_half = values[:, :half]
-    second_half = values[:, half:2*half]
-    # Stack as 2*n_batches chains
-    chains = jnp.concatenate([first_half, second_half], axis=0)  # [2*n_batches, half]
-    m = chains.shape[0]  # number of split chains
-    n = chains.shape[1]  # length of each split chain
-
-    chain_means = jnp.mean(chains, axis=1)  # [m]
-    grand_mean = jnp.mean(chain_means)
-
-    # Between-chain variance
-    B = n * jnp.var(chain_means, ddof=1) if m > 1 else 0.0
-    # Within-chain variance
-    chain_vars = jnp.var(chains, axis=1, ddof=1)  # [m]
-    W = jnp.mean(chain_vars)
-
-    if W < 1e-12:
-        r_hat = 1.0
-    else:
-        var_hat = (n - 1) / n * W + B / n
-        r_hat = float(jnp.sqrt(var_hat / W))
-
-    # --- ESS (via autocorrelation) ---
-    # Use the grand chain (all batches concatenated)
-    grand_chain = values.flatten()
-    n_total = len(grand_chain)
-    grand_mean_val = float(jnp.mean(grand_chain))
-    grand_var = float(jnp.var(grand_chain))
-
-    if grand_var < 1e-12:
-        ess = n_total
-    else:
-        max_lag = min(100, n_total // 4)
-        centered = grand_chain - grand_mean_val
-        # Vectorized autocorrelation for all lags at once
-        acfs = jnp.array([
-            jnp.mean(centered[:-lag] * centered[lag:]) / grand_var
-            for lag in range(1, max_lag + 1)
-        ])
-        # Find first lag where acf drops below 0.05 (cutoff)
-        below_threshold = acfs < 0.05
-        cutoff = jnp.argmax(below_threshold)  # 0 if none below
-        # If no lag is below threshold, use all lags
-        cutoff = jnp.where(jnp.any(below_threshold), cutoff, max_lag)
-        acf_sum = float(jnp.sum(acfs[:cutoff]))
-        ess = max(1, int(n_total / (1 + 2 * acf_sum)))
-
-    converged = (r_hat < 1.05) and (ess > 400)
-    return {"r_hat": r_hat, "ess": ess, "converged": converged}
 
 
 # ═══════════════════════════════════════════════════════════════════════════

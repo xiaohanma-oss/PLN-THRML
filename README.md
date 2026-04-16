@@ -140,9 +140,7 @@ benchmarked.
 git clone --recurse-submodules https://github.com/xiaohanma-oss/PLN-THRML.git
 cd PLN-THRML
 pip install -e .                          # core only (thrml + jax)
-pip install -e ".[metta]"                 # + MeTTa bridge (requires hyperon)
 pip install -e ".[dev]"                   # + pytest for running tests
-pip install -e ".[geodesic]"              # + Geodesic-THRML step selection
 ```
 
 > The [trueagi-io/PLN](https://github.com/trueagi-io/PLN) submodule provides
@@ -166,65 +164,28 @@ s, c = sample_and_measure(graph, target_node=graph["nodes"][1])
 print(f"P(B) = (stv {s:.4f} {c:.4f})")   # ≈ (stv 0.73 0.76)
 ```
 
-### MeTTa bridge (requires `hyperon`)
+### Unified API (separation architecture)
 
 ```python
-from hyperon import MeTTa
-from pln_thrml.metta import register_all
+from pln_thrml import unified_lbm_strength
 
-metta = MeTTa()
-register_all(metta)
-
-# Unified operator — input structure determines the rule automatically
-results = metta.run('''
-    !(thrml (A (stv 0.8 0.9)) ((Implication A B) (stv 0.9 0.85)))
-''')
-# => (B (stv 0.7242 0.5508))
-#      B       — inferred conclusion atom
-#      0.7242  — strength (inferred probability)
-#      0.5508  — confidence (evidence weight behind the estimate)
-
-# More examples:
-# Deduction:  !(thrml ((Implication A B) (stv 0.8 0.9)) ((Implication B C) (stv 0.9 0.9)))
-# Inversion:  !(thrml ((Implication B A) (stv 0.87 0.81)))
-# Revision:   !(thrml (A (stv 0.8 0.9)) (A (stv 0.3 0.7)))
-```
-
-> The input structure determines the rule automatically — no need to
-> remember individual rule names or argument orders.
-
-### Geodesic rule selection (requires `geodesic-thrml`)
-
-When multiple rules apply to the same premises, `select_and_apply()` uses
-[Geodesic-THRML](https://github.com/xiaohanma-oss/Geodesic-THRML)'s THRML
-Boltzmann controller to pick the best one:
-
-```python
-from pln_thrml.selection import select_and_apply
-
-result = select_and_apply(
-    premises=[
-        {"atom": "A", "strength": 0.8, "confidence": 0.9},
-        {"atom": "(Implication A B)", "strength": 0.9, "confidence": 0.85,
-         "link_type": "Implication", "source": "A", "target": "B"},
-    ],
-    goal_stv=(0.9, 0.9),  # optional: bias toward this goal
-    temperature=1.0,       # T>0 explores, T→0 picks deterministically
+# Modus ponens — LBM(s) on TSU + QLN(n) on CPU
+result = unified_lbm_strength(
+    rule="mp",
+    premises=[(0.8, 0.9)],        # P(A) = (s=0.8, c=0.9)
+    links=[(0.9, 0.85)],          # s(A→B)=0.9, c=0.85
 )
-
-print(result["name"])        # e.g., "modus-ponens"
-print(result["strength"])    # inferred strength
-print(result["selection"])   # diagnostics: rule_probs, energy, rho
+print(f"s={result['s']:.3f}  c={result['c']:.3f}")
+# s and c computed independently: s from Gibbs sampling, c from PLN formula
 ```
-
-Without `geodesic-thrml` installed, PLN-THRML works normally — all matching
-rules fire as before. The selection layer is opt-in.
 
 ### Run tests
 
 ```bash
-pytest tests/ -v                          # all implemented rules covered
-pytest -m slow -v                        # scalability tests (trueagi-io/PLN examples)
+# Run per-file to avoid OOM (JAX compilation cache grows large)
+python -m pytest tests/test_unified.py -v
+python -m pytest tests/test_hybrid.py -v
+python -m pytest tests/test_hardware_approximation.py -v
 ```
 
 ## How it works
@@ -252,17 +213,22 @@ confidence (bin sharpness) through discretization.
 
 ## API reference
 
-### Core engine (`pln_thrml`)
+### Unified API (`pln_thrml.unified`)
+
+| Function | Purpose |
+| -------- | ------- |
+| `unified_lbm_strength(rule, premises, links, ...)` | LBM(s) on TSU + QLN(n) on CPU — the primary inference entry point |
+
+Supports: `mp` (modus ponens), `deduction`, `abduction`, `inversion`, `revision`.
+
+### Low-level engine (`pln_thrml.beta`)
 
 **Graph builders** — each returns a `dict` with `"nodes"`, `"factors"`, and metadata:
 
 | Function | Topology |
 | -------- | -------- |
 | `build_beta_chain(priors, confidences, strengths, ...)` | Directed chain X₀→X₁→...→Xₙ (modus ponens, deduction) |
-| `build_beta_v_graph(...)` | V-shape: Left←Root→Right (induction) |
 | `build_beta_inv_v_graph(...)` | Inverted-V: Left→Center←Right (abduction) |
-| `build_beta_symmetric_chain(...)` | Bidirectional chain (Similarity, Equivalence) |
-| `build_beta_full_graph(priors, implications, ...)` | Arbitrary topology from a knowledge-base dict |
 
 **Sampling & measurement**:
 
@@ -272,18 +238,14 @@ confidence (bin sharpness) through discretization.
 | `run_beta_sampling(graph)` | Raw sample array for further analysis |
 | `estimate_beta_marginal(samples, graph, node)` | Posterior histogram + `(s, c)` for a node |
 | `estimate_beta_conditional(samples, graph, target, condition)` | P(target \| condition=True) via weighted posterior |
-| `diagnose_convergence(samples, graph, node)` | R-hat, ESS, and convergence diagnostics |
 
 **Conversion utilities**: `stv_to_beta_params(s, c)`, `posterior_to_stv(histogram, k)`, `c2w(c)` / `w2c(w)`, `bin_centers(k)`.
 
-### MeTTa bridge (`pln_thrml.metta`)
+### Confidence layer (`pln_thrml.qln_cpu`)
 
 | Function | Purpose |
 | -------- | ------- |
-| `register_all(metta)` | Register the `thrml` operator and type declarations with a MeTTa runner |
-
-The `thrml` operator dispatches automatically based on premise structure —
-see [Quick start](#quick-start) for examples of all supported input forms.
+| `qln_confidence_*` | Closed-form confidence propagation for each rule (Inversion Bayes/PLN, Revision QLN) |
 
 ## Results
 
@@ -349,24 +311,42 @@ The three-tier pipeline is our projection, not described in the
 references. Whether the gain from hardware-native sampling outweighs the
 loss of RAPTL's joint optimization is an open question.
 
+### (ρ, n) separation: hybrid architecture
+
+Inspired by QLN's quantum truth value QTV = (ρ, n), `hybrid.py` separates
+PLN's (s, c) computation:
+
+- **ρ → s**: 1 binary pbit per proposition with Ising J coupling.
+  The 2×2 conditional probability table is exactly encoded as Ising
+  parameters — zero approximation error, no K-bin discretisation.
+- **n → c**: PLN closed-form formulas on CPU/GPU (e.g. c_B = c_A × c_AB).
+  No sampling needed — c is deterministic algebra.
+
+These two paths have **no data dependency** and can run in parallel.
+The binary Ising compiler (`compiler_binary.py`) produces factor graphs
+with 1 pbit/proposition and 1 Ising coupling/edge — the simplest
+possible TSU target.  Within the 12-neighbour pbit budget, each
+proposition can participate in up to 12 implication edges.
+
 ## Project structure
 
 ```
 pln_thrml/                 Main package
-  __init__.py              Public API re-exports (beta)
-  beta.py                  Beta factor graph engine (builds, samples, recovers stv)
-  metta/                   MeTTa integration layer (optional, requires hyperon)
-    __init__.py            Entry point — exports register_all()
-    dispatch.metta         MeTTa dispatch rules — pattern-matching rule selection
-    rules.py               Grounded ops (10 rule builders) + atom helpers
-    declarations/
-      pln_types.metta      Type declarations (stv, Implication, Similarity, etc.)
+  __init__.py              Public API re-exports (beta + unified + qln_cpu)
+  beta.py                  Beta factor graph engine (builds, samples, recovers stv) + PLN utilities
+  unified.py               Unified LBM(s) on TSU + QLN(n) on CPU: per-rule g(n) calibration
+  qln_cpu.py               QLN n-layer: closed-form confidence propagation (Inversion, Revision)
+  hybrid.py                (ρ, n) separation: binary Ising sampling s + PLN formula c
+  compiler_binary.py       Binary Ising compiler (1 pbit/proposition, exact 2×2 encoding)
+  compiler_onehot.py       One-hot spin compiler (pbit-only hardware simulation)
+  compiler_unified.py      Confidence-modulated Ising compiler (g(n) precision scaling)
+  dtv_baseline.py          DTV continuous Monte Carlo baseline (zero discretization error)
 vendor/PLN/                trueagi-io/PLN (git submodule) — test baselines
 tests/
-  conftest.py              Shared fixtures and tolerance constants (strength ±0.05, confidence ±0.15)
-  test_factor_graph.py     Factor graph engine unit tests (K=4/8/16 parametrized)
-  test_metta.py            MeTTa end-to-end: 11 rules + quantale algebra + topologies + extreme inputs
-  test_scale.py            Scalability tests from trueagi-io/PLN examples (pytest -m slow)
+  conftest.py              Shared tolerance constants (strength ±0.05, confidence ±0.15)
+  test_unified.py          Unified architecture validation (DTV / PLN / Hybrid / Unified / Inversion / Revision)
+  test_hybrid.py           (ρ, n) separation validation (DTV / PLN / Cat / OH / Binary / Hybrid)
+  test_hardware_approximation.py  Pbit-only hardware cost analysis (DTV / Cat / OneHot / Potts comparison)
 ```
 
 ## Contributing
