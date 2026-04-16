@@ -25,9 +25,11 @@
 ## Overview
 
 PLN-THRML compiles probabilistic logic inference rules into factor graphs
-that run on thermodynamic hardware. You give it PLN premises with truth
-values; it builds a Boltzmann energy model, runs Gibbs sampling, and returns
-inferred truth values. 11 PLN rules are implemented and verified end-to-end.
+that run on thermodynamic hardware. The **(ρ, n) separation architecture**
+splits each inference into two independent paths: **strength (s)** via
+Ising Gibbs sampling on TSU, **confidence (c)** via closed-form algebra
+on CPU. 5 PLN rules (MP, Deduction, Abduction, Inversion, Revision) are
+implemented and verified end-to-end with 88 tests.
 
 <details>
 <summary><strong>New to PLN? (30-second primer)</strong></summary>
@@ -82,14 +84,14 @@ log-probabilities become energy weights directly.
 
 </details>
 
-**Technical summary**: PLN truth values compile to Boltzmann energy
-weights via `P(x) ∝ e^{−ℰ(x)}` (take the negative log of each
-probability to get the energy), and Gibbs sampling over the
-resulting factor graph recovers correct inference results — including
-both P(B|A) and P(A|B) from the same graph (hardware performs Bayes'
-rule automatically). 11 rules × multiple parameter sets constitute the
-end-to-end evidence. Rule selection and structure discovery remain on
-CPU/GPU.
+**Technical summary**: PLN's 2×2 conditional probability table encodes
+exactly as Ising parameters (bias _h_, coupling _J_) — 1 pbit per
+proposition, zero discretisation error for strength. Confidence
+propagates via closed-form PLN/QLN algebra on CPU, running in parallel
+with the TSU sampler. For rules needing higher resolution (abduction),
+a K-bin Beta fallback path provides full distributional inference.
+5 rules × multiple parameter sets × 88 tests constitute the evidence.
+Rule selection and structure discovery remain on CPU/GPU.
 
 ## Why this matters
 
@@ -121,16 +123,14 @@ can grow sharply for landscapes with tall energy barriers.
 
 ### Inference accuracy
 
-PLN's rule formulas operate on point estimates — they plug strength
-values into algebraic expressions that assume independence or use
-heuristic simplifications. PLN-THRML instead discretizes each truth
-value into a K-bin Beta distribution and lets the factor graph compute
-the exact joint posterior via Gibbs sampling, preserving the full
-distributional shape. The [Results](#results) table shows this
-concretely — abduction and induction diverge from PLN's formulas not
-because the factor graph is inaccurate, but because the point-estimate
-formulas lose information. Inversion gives exact Bayesian P(A|B) where
-PLN uses a heuristic with a fixed 0.6 confidence discount.
+The separation architecture computes strength via Ising sampling and
+confidence via PLN closed-form formulas. For most rules (MP, Deduction),
+the binary Ising path recovers strength with zero discretisation error —
+the 2×2 conditional table maps exactly to Ising (h, J). For rules where
+binary encoding is insufficient (Abduction), a K-bin Beta fallback or
+hidden-unit topology provides higher resolution. Inversion uses exact
+Bayesian P(A|B) = P(B|A)·P(A)/P(B), bypassing PLN's heuristic 0.6
+confidence discount.
 
 ### Energy efficiency
 
@@ -155,12 +155,23 @@ pip install -e ".[dev]"                   # + pytest for running tests
 
 ## Quick start
 
-### Python API (no MeTTa dependency)
+### Unified API (separation architecture)
+
+```python
+from pln_thrml import unified_modus_ponens
+
+# Modus ponens: P(A)=(0.8, 0.9), s(A→B)=0.9, c(A→B)=0.85
+s, c, meta = unified_modus_ponens(s_A=0.8, c_A=0.9, s_AB=0.9, c_AB=0.85)
+print(f"P(B) = (stv {s:.3f} {c:.3f})")   # ≈ (stv 0.724 0.765)
+# s from Ising Gibbs sampling, c from PLN closed-form formula
+```
+
+### Low-level Beta engine
 
 ```python
 from pln_thrml import build_beta_chain, sample_and_measure
 
-# Modus ponens: A → B, P(A)=0.8, s(A→B)=0.9
+# Same inference via K-bin factor graph (baseline/comparison)
 graph = build_beta_chain(
     priors=[0.8, 0.5], confidences=[0.9, 0.01],
     strengths=[0.9], impl_confidences=[0.85],
@@ -168,21 +179,6 @@ graph = build_beta_chain(
 )
 s, c = sample_and_measure(graph, target_node=graph["nodes"][1])
 print(f"P(B) = (stv {s:.4f} {c:.4f})")   # ≈ (stv 0.73 0.76)
-```
-
-### Unified API (separation architecture)
-
-```python
-from pln_thrml import unified_lbm_strength
-
-# Modus ponens — LBM(s) on TSU + QLN(n) on CPU
-result = unified_lbm_strength(
-    rule="mp",
-    premises=[(0.8, 0.9)],        # P(A) = (s=0.8, c=0.9)
-    links=[(0.9, 0.85)],          # s(A→B)=0.9, c=0.85
-)
-print(f"s={result['s']:.3f}  c={result['c']:.3f}")
-# s and c computed independently: s from Gibbs sampling, c from PLN formula
 ```
 
 ### Run tests
@@ -196,26 +192,32 @@ python -m pytest tests/test_hardware_approximation.py -v
 
 ## How it works
 
-1. **Parameterize** — PLN `(stv s c)` → Beta(α, β) with mean = s
-2. **Discretize** — discretize each Beta distribution into **K bins** (`CategoricalNode`). Higher K → better accuracy; lower K → faster sampling.
-3. **Build graph** — each implication becomes a K×K weight table (log of the discretized conditional Beta); assemble all nodes and factors into a factor graph.
-4. **Sample** — Block Gibbs sampling (50 batches × 2,000 samples). Root nodes can be **clamped** (fixed to their prior values as known evidence) while free nodes are updated by Gibbs sweeps.
-5. **Recover** — moment-match the posterior histogram → `(strength, confidence)`
+### (ρ, n) separation — the main path
 
-The Beta-to-energy compilation preserves both strength (bin position) and
-confidence (bin sharpness) through discretization.
+1. **Compile s** — PLN's 2×2 conditional table `[ε, s_AB; 1−ε, 1−s_AB]` maps exactly to Ising parameters: bias _h_ encodes the prior, coupling _J_ encodes the implication strength. 1 `SpinNode` per proposition.
+2. **Sample s (TSU)** — Block Gibbs sampling over Ising spins. Binary encoding means zero discretisation error for strength.
+3. **Compute c (CPU)** — PLN closed-form: e.g. `c_B = c_A × c_AB` for modus ponens. No sampling needed — deterministic algebra.
+4. **Iterate** — g(n)-modulated coupling strength converges over 2–3 rounds. Each round recompiles with updated confidence.
+5. **Return** — `(strength, confidence, metadata)` with convergence history.
 
-| PLN concept                       | thrml construct                             | Extropic hardware               |
-| --------------------------------- | ------------------------------------------- | ------------------------------- |
-| Proposition (VariableAtom)        | `CategoricalNode` (K bins)                  | pdit (K-category sampling cell) |
-| Prior P(A)                        | Unary `CategoricalEBMFactor` (Beta prior)   | Bias field on pdit              |
-| Implication A→B (strength s)      | Pairwise `SquareCategoricalEBMFactor` (K×K) | Coupling between pdits          |
-| TruthValue (strength, confidence) | Beta posterior → moment-matching            | Posterior distribution readout  |
-| Inference rule                    | Block Gibbs sampling                        | Thermal equilibration           |
-| Deduction chain                   | Chain factor graph                          | Pipeline of coupled clusters    |
-| Induction (V-shape)               | Star factor graph                           | Hub-and-spoke topology          |
-| Abduction (inverted-V)            | Collider factor graph                       | Explaining-away circuit         |
-| Revision (evidence merge)         | Multiple unary factors on one node          | Competing bias fields converge  |
+### K-bin Beta fallback
+
+For rules where binary encoding is insufficient (abduction's explaining-away
+needs full joint), a K-bin `CategoricalNode` path provides higher resolution:
+PLN `(stv s c)` → Beta(α,β) → K-bin discretisation → K×K factor weights →
+Gibbs sampling → moment-match posterior → `(s, c)`.
+
+### PLN → thrml mapping
+
+| PLN concept                       | Separation path (main)                       | K-bin path (fallback)                       | Hardware          |
+| --------------------------------- | -------------------------------------------- | ------------------------------------------- | ----------------- |
+| Proposition                       | `SpinNode` (binary ±1)                       | `CategoricalNode` (K bins)                  | pbit / pdit       |
+| Prior P(A)                        | Ising bias _h_                               | Unary `CategoricalEBMFactor`                | Bias field        |
+| Implication A→B                   | Ising coupling _J_                           | `SquareCategoricalEBMFactor` (K×K)          | Coupling          |
+| Confidence c                      | PLN/QLN formula on CPU                       | Moment-matching from posterior              | CPU               |
+| Deduction chain                   | Chain of Ising spins                         | Chain of K-bin nodes                        | Spin pipeline     |
+| Abduction (inverted-V)            | Hidden-unit topology                         | Collider factor graph                       | Explaining-away   |
+| Revision                          | QLN formula: n_rev = n₁ + n₂                | —                                           | CPU only          |
 
 ## API reference
 
@@ -255,38 +257,34 @@ Supports: `mp` (modus ponens), `deduction`, `abduction`, `inversion`, `revision`
 
 ## Results
 
-11 PLN rules compiled and verified (K=16, 100,000 samples). Strength errors
-for representative parameter sets
-(representative parameter sets):
+5 PLN rules verified across three architecture levels (88 tests total).
+Representative strength errors (Δ vs DTV continuous baseline):
 
-| Rule              | Max Error | Rule              | Max Error |
-| ----------------- | --------- | ----------------- | --------- |
-| Modus Ponens      | 0.008     | Negation          | 0.000     |
-| Deduction         | 0.073     | Revision          | 0.015     |
-| Inversion         | 0.038     | Sym. Modus Ponens | 0.005     |
-| Induction         | 0.046     | Equiv→Impl        | 0.025     |
-| Abduction         | 0.130     | Trans. Similarity | 0.050     |
-| Eval. Implication | 0.061     |                   |           |
+| Rule         | Unified (Ising+QLN) | Hybrid (Binary+PLN) | Categorical (K=4) |
+| ------------ | ------------------- | -------------------- | ------------------ |
+| Modus Ponens | 0.053               | 0.018                | 0.061              |
+| Deduction    | 0.050               | 0.085                | 0.049              |
+| Abduction    | 0.116 (K-bin path)  | 0.269                | 0.036              |
+| Inversion    | 0.021 (Bayes exact) | —                    | —                  |
+| Revision     | 0.001 (QLN formula) | —                    | —                  |
 
-Most rules match within 5%. Abduction/Induction diverge because PLN uses
-closed-form approximations while the factor graph computes the exact joint
-posterior. Inversion gives exact Bayesian P(A|B) vs PLN's heuristic.
+MP and Deduction use the binary Ising main path. Abduction falls back to
+K-bin for full joint resolution. Inversion and Revision are CPU-only
+(Bayes formula and QLN n₁+n₂).
 
-### Effect of K on accuracy
+### Hardware cost comparison
 
-Reducing K from 16 to 4 (for TSU hardware deployment) introduces additional
-discretization error. Measured on Modus Ponens (s_A=0.8, s_AB=0.9, PLN
-analytical strength = 0.724) and single-node prior recovery:
+Five-column comparison at K=4 (test_hardware_approximation):
 
-| K   | MP Δs vs PLN | Prior Δs (worst) | Prior Δc (worst) | Couplings/impl |
-| --- | ------------ | ---------------- | ---------------- | -------------- |
-| 16  | 0.008        | 0.001            | 0.013            | 256            |
-| 8   | 0.011        | 0.008            | 0.035            | 64             |
-| 4   | 0.024        | 0.019            | 0.067            | 16             |
+| Method              | Pbits/prop | Couplings/edge | MP Δs (strong) |
+| ------------------- | ---------- | -------------- | -------------- |
+| Categorical (full)  | K          | K²             | 0.061          |
+| One-hot (full)      | K          | K²             | 0.055          |
+| Potts (diagonal)    | K          | K              | 0.019          |
+| Binary Ising        | 1          | 1              | 0.018          |
 
-K=4 strength error is 0.024 — well within the 0.05 tolerance used for K=16
-tests. Confidence recovery degrades more (Δc up to 0.067) because
-moment-matching from 4 bins has less information.
+Binary Ising achieves comparable accuracy to K=4 categorical at 1/16th
+the hardware cost (1 pbit vs 16 spin nodes, 1 coupling vs 16).
 
 ## Hyperon integration outlook
 
@@ -298,9 +296,9 @@ uncertainty tolerance can inform sparse-to-dense approximation decisions
 alongside resource constraints.
 
 This project takes a different approach: extract Q_tv and compile it to
-TSU hardware, keeping Q_logic on CPU/GPU. This trades RAPTL's joint
-optimization for hardware-native sampling — 11 PLN rules validate that
-Q_tv executes faithfully this way.
+TSU hardware via (ρ, n) separation, keeping Q_logic on CPU/GPU. This
+trades RAPTL's joint optimization for hardware-native sampling — 5 PLN
+rules validate that Q_tv executes faithfully this way.
 
 A possible heterogeneous pipeline extending this idea:
 
@@ -316,23 +314,6 @@ to sampling from P(x) ∝ e^{−ℰ(x)} is a candidate (see [Sister Projects](#s
 The three-tier pipeline is our projection, not described in the
 references. Whether the gain from hardware-native sampling outweighs the
 loss of RAPTL's joint optimization is an open question.
-
-### (ρ, n) separation: hybrid architecture
-
-Inspired by QLN's quantum truth value QTV = (ρ, n), `hybrid.py` separates
-PLN's (s, c) computation:
-
-- **ρ → s**: 1 binary pbit per proposition with Ising J coupling.
-  The 2×2 conditional probability table is exactly encoded as Ising
-  parameters — zero approximation error, no K-bin discretisation.
-- **n → c**: PLN closed-form formulas on CPU/GPU (e.g. c_B = c_A × c_AB).
-  No sampling needed — c is deterministic algebra.
-
-These two paths have **no data dependency** and can run in parallel.
-The binary Ising compiler (`compiler_binary.py`) produces factor graphs
-with 1 pbit/proposition and 1 Ising coupling/edge — the simplest
-possible TSU target.  Within the 12-neighbour pbit budget, each
-proposition can participate in up to 12 implication edges.
 
 ## Project structure
 
