@@ -162,7 +162,7 @@ from pln_thrml import unified_modus_ponens
 
 # Modus ponens: P(A)=(0.8, 0.9), s(A→B)=0.9, c(A→B)=0.85
 s, c, meta = unified_modus_ponens(s_A=0.8, c_A=0.9, s_AB=0.9, c_AB=0.85)
-print(f"P(B) = (stv {s:.3f} {c:.3f})")   # ≈ (stv 0.724 0.765)
+print(f"P(B) = (stv {s:.3f} {c:.3f})")   # ≈ (stv 0.777 0.765)
 # s from Ising Gibbs sampling, c from PLN closed-form formula
 ```
 
@@ -223,11 +223,15 @@ Gibbs sampling → moment-match posterior → `(s, c)`.
 
 ### Unified API (`pln_thrml.unified`)
 
-| Function | Purpose |
-| -------- | ------- |
-| `unified_lbm_strength(rule, premises, links, ...)` | LBM(s) on TSU + QLN(n) on CPU — the primary inference entry point |
+| Function | Rule |
+| -------- | ---- |
+| `unified_modus_ponens(s_A, c_A, s_AB, c_AB)` | A, A→B ⊢ B |
+| `unified_deduction(s_A, c_A, s_B, c_B, s_C, c_C, s_AB, c_AB, s_BC, c_BC)` | A→B, B→C ⊢ A→C |
+| `unified_abduction(s_A, c_A, s_B, c_B, s_AC, c_AC, s_BC, c_BC)` | A→C, B→C ⊢ A→B |
+| `unified_inversion(s_A, c_A, s_B, c_B, s_AB, c_AB)` | A→B ⊢ B→A |
+| `unified_revision(s1, c1, s2, c2)` | merge two evidence streams |
 
-Supports: `mp` (modus ponens), `deduction`, `abduction`, `inversion`, `revision`.
+TSU rules (MP, Deduction, Abduction) return `(strength, confidence, metadata)` and iterate 2–3 rounds. CPU-only rules (Inversion, Revision) return `(strength, confidence)` immediately.
 
 ### Low-level engine (`pln_thrml.beta`)
 
@@ -253,7 +257,12 @@ Supports: `mp` (modus ponens), `deduction`, `abduction`, `inversion`, `revision`
 
 | Function | Purpose |
 | -------- | ------- |
-| `qln_confidence_*` | Closed-form confidence propagation for each rule (Inversion Bayes/PLN, Revision QLN) |
+| `c_modus_ponens(c_A, c_AB)` | c_B = c_A × c_AB |
+| `c_deduction(s_AB, c_AB, s_BC, c_BC)` | c_AC from chain |
+| `c_abduction(s_AC, c_AC, s_BC, c_BC)` | c_AB from shared consequent |
+| `inversion_bayes(s_A, c_A, s_B, c_B, s_AB, c_AB)` | Exact Bayesian P(B→A) |
+| `inversion_pln(s_A, c_A, s_B, c_B, s_AB, c_AB)` | PLN heuristic |
+| `revision(s1, c1, s2, c2)` | Evidence merge: n_rev = n₁ + n₂ |
 
 ## Results
 
