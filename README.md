@@ -58,16 +58,22 @@ when compiling to hardware.
 <summary><strong>New to thrml / factor graphs? (30-second primer)</strong></summary>
 
 A **factor graph** is a bipartite graph of variable nodes and factor nodes.
-Each variable holds a discrete distribution over K states; each factor
-encodes how likely certain state combinations are via a weight table.
+Each variable holds a discrete distribution; each factor encodes how likely
+certain state combinations are via a weight table.
 
-In thrml:
+In thrml (two levels):
 
 | thrml construct                  | What it does                                                       |
 | -------------------------------- | ------------------------------------------------------------------ |
-| `CategoricalNode(K)`            | A discrete random variable with K possible states                  |
-| `CategoricalEBMFactor` (unary)  | Weight table encoding a prior — how likely each state is on its own |
+| `SpinNode`                       | Binary (±1) variable — 1 pbit per proposition                     |
+| `SpinEBMFactor`                  | Ising bias (_h_) + coupling (_J_) between spins                   |
+| `CategoricalNode(K)`            | K-state discrete variable (K-bin Beta prior)                       |
+| `CategoricalEBMFactor` (unary)  | Weight vector encoding a prior over K bins                         |
 | `SquareCategoricalEBMFactor` (pairwise) | K×K weight table encoding a conditional relationship between two nodes |
+
+The separation architecture's main path uses `SpinNode` (1 pbit = 1
+proposition, exact 2×2 encoding). K-bin `CategoricalNode` is used for
+baseline comparison and rules (like abduction) that need higher resolution.
 
 **Gibbs sampling** iteratively resamples each variable conditioned on its
 neighbors until the joint distribution converges. The Boltzmann connection
