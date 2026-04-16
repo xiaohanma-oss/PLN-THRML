@@ -2,14 +2,13 @@
 pln_thrml.unified — LBM(s) on TSU + QLN(n) on CPU
 ====================================================
 
-Unified architecture orchestrator:
-  - **s layer (TSU)**: LBM RBM structure with g(n)-modulated Ising couplings
+Pure (ρ, n) separation orchestrator:
+  - **s layer (TSU)**: Binary Ising sampling with g=1 (no precision modulation)
   - **n layer (CPU)**: QLN-style closed-form confidence propagation
 
-Iterative loop (for TSU rules):
-  Round 0: g(n_input) → compile → sample → s_out → CPU c_out
-  Round 1+: g(n_out) → recompile → sample → check convergence
-  Return (s, c, metadata)
+n is the precision itself (= Active Inference ζ). No g(n) cross-talk
+between layers — each edge's 2×2 CPT is exactly encoded by Ising (J, h)
+from strength alone. Confidence propagates independently via PLN formulas.
 
 CPU-only rules (Inversion, Revision) delegate directly to qln_cpu.
 """
@@ -23,11 +22,13 @@ from pln_thrml.beta import (
     DEFAULT_BETA_N_BATCHES,
 )
 from pln_thrml.compiler_unified import (
-    default_g_fn,
     compile_modulated_chain,
     compile_modulated_inv_v,
     compile_modulated_inv_v_with_hidden,
 )
+
+# Pure separation: g=1 always. No precision modulation across layers.
+_G_IDENTITY = lambda n: 1.0
 from pln_thrml.compiler_binary import (
     compile_binary_chain_with_hidden,
     run_binary_sampling,
@@ -122,59 +123,30 @@ def _binary_conditional(samples_dict, graph, target_idx, condition_idx):
 def unified_modus_ponens(s_A, c_A, s_AB, c_AB,
                          background=DEFAULT_EPSILON,
                          seed=42, n_batches=None,
-                         max_rounds=DEFAULT_MAX_ROUNDS,
-                         tol=DEFAULT_TOL, g_fn=None):
-    """Unified Modus Ponens: binary Ising sampling (no g(n) modulation).
+                         max_rounds=1, tol=DEFAULT_TOL, g_fn=None):
+    """Pure-separation Modus Ponens: binary Ising (g=1) + PLN formula.
 
-    TSU: pairwise w·A·B with exact 2×2 CPT encoding, g=1.
+    TSU: exact 2×2 CPT → Ising (J, h), single-round sampling.
     CPU: c_B = c_A × c_AB.
 
-    MP is LINEAR in its inputs → binary 2×2 CPT is exact → g(n) modulation
-    only distorts the conditional probabilities.  g=1 gives Δ≈0.
-
-    Returns
-    -------
-    (s_B, c_B, meta) : tuple[float, float, dict]
+    Returns (s_B, c_B, meta).
     """
     if n_batches is None:
         n_batches = DEFAULT_BINARY_N_BATCHES
-    # MP is linear → g(n) modulation is harmful, force g=1
-    _g_identity = lambda n: 1.0
-    if g_fn is None:
-        g_fn = _g_identity
 
-    # n-path: c is independent of s_out for MP
     c_B = c_modus_ponens(c_A, c_AB)
 
-    history = []
-    s_prev, c_prev = None, None
+    graph = compile_modulated_chain(
+        priors=[s_A, 0.5],
+        strengths=[s_AB],
+        confidences=[c_AB],
+        backgrounds=[background],
+        g_fn=_G_IDENTITY,
+        clamp_root=True)
+    samples = run_binary_sampling(graph, seed=seed, n_batches=n_batches)
+    s_B = estimate_binary_marginal(samples, graph, 1)
 
-    for rnd in range(max_rounds):
-        # Use output confidence from previous round to modulate,
-        # or input confidence for round 0
-        c_edge = c_AB if rnd == 0 else c_AB  # MP: edge confidence is fixed
-
-        graph = compile_modulated_chain(
-            priors=[s_A, 0.5],
-            strengths=[s_AB],
-            confidences=[c_edge],
-            backgrounds=[background],
-            g_fn=g_fn,
-            clamp_root=True)
-        samples = run_binary_sampling(
-            graph, seed=seed + rnd * 1000, n_batches=n_batches)
-        s_B = estimate_binary_marginal(samples, graph, 1)
-
-        history.append((s_B, c_B))
-
-        # Check convergence
-        if s_prev is not None:
-            if abs(s_B - s_prev) < tol and abs(c_B - c_prev) < tol:
-                return s_B, c_B, _iterative_meta(history, converged=True)
-
-        s_prev, c_prev = s_B, c_B
-
-    return s_B, c_B, _iterative_meta(history, converged=(max_rounds <= 1))
+    return s_B, c_B, _iterative_meta([(s_B, c_B)], converged=True)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -185,38 +157,24 @@ def unified_deduction(s_A, c_A, s_B, c_B, s_C, c_C,
                       s_AB, c_AB, s_BC, c_BC,
                       background=DEFAULT_EPSILON,
                       seed=42, n_batches=None,
-                      max_rounds=DEFAULT_MAX_ROUNDS,
-                      tol=DEFAULT_TOL, g_fn=None):
-    """Unified Deduction: LBM(s) + QLN(n) with g(n)-modulated 3-node chain.
+                      max_rounds=1, tol=DEFAULT_TOL, g_fn=None):
+    """Pure-separation Deduction: binary Ising (g=1) 3-node chain + PLN formula.
 
     TSU: single 3-node chain A→B→C, clamp A, simultaneously sample B+C.
     CPU: c_AC = s_AB × s_BC × c_AB × c_BC.
 
-    Uses a single graph with all nodes (LBM correct usage), not two
-    sequential MP calls.  This avoids g(n) error accumulation.
+    The dominant error is the Jensen gap from (ρ,n) separation: binary
+    Ising encodes E[s] but the conditional is nonlinear in s, so
+    f(E[s]) ≠ E[f(s)].  This is the true cost of mean-field separation.
 
-    The dominant error source is the Jensen gap from (ρ,n) separation:
-    binary Ising encodes E[s] but the conditional probability is nonlinear
-    in s, so f(E[s]) ≠ E[f(s)].  This gap depends on g(n) scale —
-    weaker g reduces bias at the cost of higher variance.  The default
-    g(n) = sqrt(n/2) is calibrated for single-edge rules (MP); for
-    multi-edge chains, consider g_fn=lambda n: min(sqrt(n/4), 6).
-
-    Returns
-    -------
-    (s_AC, c_AC, meta) : tuple[float, float, dict]
+    Returns (s_AC, c_AC, meta).
     """
     if n_batches is None:
         n_batches = DEFAULT_BINARY_N_BATCHES
-    if g_fn is None:
-        g_fn = default_g_fn
 
-    # n-path: c is fixed for deduction (depends on inputs only)
     c_AC = c_deduction(s_AB, c_AB, s_BC, c_BC)
 
     # PLN base rates: P(child | parent=False) — structural parameters.
-    # These are properties of the RULE, not posterior beliefs, so they
-    # are computed once from input priors and not updated during iteration.
     bg_AB_raw = ((float(s_B) - float(s_A) * float(s_AB))
                  / max(1.0 - float(s_A), 1e-7))
     bg_BC_raw = ((float(s_C) - float(s_B) * float(s_BC))
@@ -224,34 +182,18 @@ def unified_deduction(s_A, c_A, s_B, c_B, s_C, c_C,
     bg_AB = max(min(bg_AB_raw, 0.98), 0.01) if 0.0 < bg_AB_raw < 1.0 else background
     bg_BC = max(min(bg_BC_raw, 0.98), 0.01) if 0.0 < bg_BC_raw < 1.0 else background
 
-    history = []
-    s_prev, c_prev = None, None
-
-    for rnd in range(max_rounds):
-        graph = compile_modulated_chain(
-            priors=[s_A, 0.5, 0.5],
-            strengths=[s_AB, s_BC],
-            confidences=[c_AB, c_BC],
-            backgrounds=[bg_AB, bg_BC],
-            g_fn=g_fn,
-            clamp_root=True)
-        samples = run_binary_sampling(
-            graph, seed=seed + rnd * 1000, n_batches=n_batches)
-        # Node 2 = C (tail of chain)
-        s_C_inferred = estimate_binary_marginal(samples, graph, 2)
-
-        history.append((s_C_inferred, c_AC))
-
-        if s_prev is not None:
-            if (abs(s_C_inferred - s_prev) < tol
-                    and abs(c_AC - c_prev) < tol):
-                return (s_C_inferred, c_AC,
-                        _iterative_meta(history, converged=True))
-
-        s_prev, c_prev = s_C_inferred, c_AC
+    graph = compile_modulated_chain(
+        priors=[s_A, 0.5, 0.5],
+        strengths=[s_AB, s_BC],
+        confidences=[c_AB, c_BC],
+        backgrounds=[bg_AB, bg_BC],
+        g_fn=_G_IDENTITY,
+        clamp_root=True)
+    samples = run_binary_sampling(graph, seed=seed, n_batches=n_batches)
+    s_C_inferred = estimate_binary_marginal(samples, graph, 2)
 
     return s_C_inferred, c_AC, _iterative_meta(
-        history, converged=(max_rounds <= 1))
+        [(s_C_inferred, c_AC)], converged=True)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -281,7 +223,7 @@ def unified_abduction(s_A, c_A, s_B, c_B,
                       k=16,
                       hidden_strength=1.5,
                       mfc_lambda=1.0, mfc_alpha=0.3):
-    """Unified Abduction with four method options.
+    """Pure-separation Abduction with four method options.
 
     Parameters
     ----------
@@ -291,12 +233,8 @@ def unified_abduction(s_A, c_A, s_B, c_B,
         "binary"        — Binary Ising inv-V, no hidden (baseline)
         "binary_hidden" — Binary Ising inv-V + hidden explaining-away unit
 
-    Returns
-    -------
-    (s_AB, c_AB, meta) : tuple[float, float, dict]
+    Returns (s_AB, c_AB, meta).
     """
-    if g_fn is None:
-        g_fn = default_g_fn
 
     # n-path: c from PLN formula (same for all methods)
     c_AB = c_abduction(s_AC, c_AC, s_BC, c_BC)
@@ -335,7 +273,7 @@ def unified_abduction(s_A, c_A, s_B, c_B,
                 left_background=background,
                 right_background=background,
                 center_prior=center_prior,
-                g_fn=g_fn)
+                g_fn=_G_IDENTITY)
             samples = run_binary_sampling(
                 graph, seed=seed + rnd * 1000, n_batches=n_batches)
             # Query P(B|A) from joint samples: A=node0, B=node2
@@ -370,7 +308,7 @@ def unified_abduction(s_A, c_A, s_B, c_B,
                 right_background=background,
                 center_prior=0.5,
                 hidden_strength=hidden_strength,
-                g_fn=g_fn)
+                g_fn=_G_IDENTITY)
         else:  # "binary"
             graph = compile_modulated_inv_v(
                 left_prior=s_A, right_prior=s_B,
@@ -379,7 +317,7 @@ def unified_abduction(s_A, c_A, s_B, c_B,
                 left_background=background,
                 right_background=background,
                 center_prior=0.5,
-                g_fn=g_fn)
+                g_fn=_G_IDENTITY)
 
         samples = run_binary_sampling(
             graph, seed=seed + rnd * 1000, n_batches=n_batches)
