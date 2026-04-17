@@ -15,12 +15,7 @@ CPU-only rules (Inversion, Revision) delegate directly to qln_cpu.
 
 import math
 
-from pln_thrml.beta import (
-    DEFAULT_EPSILON, c2w, w2c,
-    build_beta_inv_v_graph, run_beta_sampling,
-    estimate_beta_marginal, estimate_beta_conditional,
-    DEFAULT_BETA_N_BATCHES,
-)
+from pln_thrml.pln_utils import DEFAULT_EPSILON
 from pln_thrml.compiler_unified import (
     compile_modulated_chain,
     compile_modulated_inv_v,
@@ -31,8 +26,10 @@ from pln_thrml.compiler_unified import (
 _G_IDENTITY = lambda n: 1.0
 from pln_thrml.compiler_binary import (
     compile_binary_chain_with_hidden,
+    compile_binary_joint_2node,
     run_binary_sampling,
     estimate_binary_marginal,
+    _binary_conditional,
     DEFAULT_BINARY_N_BATCHES,
 )
 from pln_thrml.qln_cpu import (
@@ -65,55 +62,6 @@ def _iterative_meta(history, converged):
         "converged": converged,
         "history": history,
     }
-
-
-def _joint_ising_params(s_parent, s_link, background=DEFAULT_EPSILON):
-    """Compute BOTH Ising biases from the full joint distribution.
-
-    Unlike prior_bias(s) which assumes the node is isolated, this
-    computes h_parent that gives the correct marginal P(parent)
-    even in the presence of coupling J.  This is what LBM does
-    implicitly — encode the correct joint, not just the conditional.
-
-    Returns (J, h_parent, h_child).
-    """
-    s = max(min(float(s_link), 1.0 - 1e-7), 1e-7)
-    bg = max(min(float(background), 1.0 - 1e-7), 1e-7)
-    sp = max(min(float(s_parent), 1.0 - 1e-7), 1e-7)
-
-    # Full joint: P(A,B) = P(B|A) × P(A)
-    p_tt = sp * s
-    p_tf = sp * (1.0 - s)
-    p_ft = (1.0 - sp) * bg
-    p_ff = (1.0 - sp) * (1.0 - bg)
-
-    J = 0.25 * math.log(p_tt * p_ff / max(p_tf * p_ft, 1e-30))
-    h_parent = 0.25 * math.log(p_tt * p_tf / max(p_ft * p_ff, 1e-30))
-    h_child = 0.25 * math.log(p_tt * p_ft / max(p_tf * p_ff, 1e-30))
-
-    return J, h_parent, h_child
-
-
-def _binary_conditional(samples_dict, graph, target_idx, condition_idx):
-    """Estimate P(target=T | condition=T) from binary Ising samples.
-
-    For inv-V abduction: P(B|A) from joint samples of all-free graph.
-    """
-    import jax.numpy as jnp
-
-    vmap_samples = samples_dict["vmap_samples"]
-    # All-free graph: node_idx maps directly to vmap_samples index
-    target = vmap_samples[target_idx][:, :, 0]      # [n_batches, n_samples]
-    condition = vmap_samples[condition_idx][:, :, 0]  # [n_batches, n_samples]
-
-    # Spin values are 0.0 or 1.0 (mapped from {-1, +1})
-    cond_true = condition > 0.5
-    both_true = cond_true & (target > 0.5)
-
-    n_cond = float(jnp.sum(cond_true))
-    if n_cond < 1.0:
-        return 0.5  # fallback if condition is never true
-    return float(jnp.sum(both_true)) / n_cond
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -215,47 +163,73 @@ def _bias_to_prior(bias_correction):
 
 def unified_abduction(s_A, c_A, s_B, c_B,
                       s_AC, c_AC, s_BC, c_BC,
+                      s_C=None, c_C=None,
                       background=DEFAULT_EPSILON,
                       seed=42, n_batches=None,
                       max_rounds=DEFAULT_MAX_ROUNDS,
                       tol=DEFAULT_TOL, g_fn=None,
-                      method="kbin",
-                      k=16,
+                      method="chain",
                       hidden_strength=1.5,
                       mfc_lambda=1.0, mfc_alpha=0.3):
-    """Pure-separation Abduction with four method options.
+    """Pure-separation Abduction.
+
+    Default method "chain" implements PLN's formal definition
+    (Ch 5.4): Abduction = Deduction ∘ Inversion.  Given edges A→C
+    and B→C, Bayes-invert B→C to C→B, then run Deduction chain
+    A→C→B to query P(B|A).
 
     Parameters
     ----------
+    s_C, c_C : float or None
+        Prior strength/confidence of the shared effect C.  PLN book
+        Ch 5.4 abduction formally requires P(C) as input.  If None,
+        estimated via Noisy-OR: s_C ≈ 1 − (1−s_A·s_AC)·(1−s_B·s_BC).
     method : str
-        "kbin"          — K-bin CategoricalNode inv-V (pdit native, highest accuracy)
-        "mfc"           — Binary Ising + Mean-Field Constraint bias feedback
-        "binary"        — Binary Ising inv-V, no hidden (baseline)
-        "binary_hidden" — Binary Ising inv-V + hidden explaining-away unit
+        "chain"         — Deduction∘Inversion composition (default, PLN Ch 5.4)
+        "mfc"           — Legacy: Binary Ising + MFC bias feedback
+        "binary"        — Legacy: Binary Ising inv-V, no hidden (baseline)
+        "binary_hidden" — Legacy: Binary Ising inv-V + hidden explaining-away
 
     Returns (s_AB, c_AB, meta).
     """
+    # Estimate s_C via Noisy-OR if not provided (PLN book Ch 5.4 requires it)
+    if s_C is None:
+        s_C = 1.0 - (1.0 - float(s_A) * float(s_AC)) * (1.0 - float(s_B) * float(s_BC))
+    if c_C is None:
+        c_C = min(float(c_A), float(c_B), float(c_AC), float(c_BC))
 
-    # n-path: c from PLN formula (same for all methods)
-    c_AB = c_abduction(s_AC, c_AC, s_BC, c_BC)
-
-    # ── K-bin CategoricalNode (pdit native) ──────────────────────────
-    if method == "kbin":
+    # ── Chain method: Abduction = Deduction ∘ Inversion (PLN Ch 5.4) ──
+    if method == "chain":
+        import numpy as np
+        from pln_thrml.compiler_binary import compile_binary_chain
+        # Step 1: Bayes-invert B→C into C→B
+        s_CB, c_CB = inversion_bayes(
+            s_A=s_B, c_A=c_B, s_B=s_C, c_B=c_C,
+            s_AB=s_BC, c_AB=c_BC)
+        # Step 2: Deduction chain A→C_shared→B with correct priors
+        # Priors [s_A (clamped root), s_C (shared effect), s_B (target)]
         if n_batches is None:
-            n_batches = DEFAULT_BETA_N_BATCHES
-        graph = build_beta_inv_v_graph(
-            left_prior=s_A, left_confidence=c_A,
-            right_prior=s_B, right_confidence=c_B,
-            left_strength=s_AC, right_strength=s_BC,
-            left_impl_confidence=c_AC, right_impl_confidence=c_BC,
-            left_background=background, right_background=background,
-            k=k)
-        samples = run_beta_sampling(graph, seed=seed, n_batches=n_batches)
-        # Query P(B|A) — the abduction result — not P(C)
-        _, s_AB_sampled, _ = estimate_beta_conditional(
-            samples, graph, target=graph["right"], condition=graph["left"])
-        return s_AB_sampled, c_AB, _iterative_meta(
-            [(s_AB_sampled, c_AB)], converged=True)
+            n_batches = DEFAULT_BINARY_N_BATCHES
+        graph = compile_binary_chain(
+            [float(s_A), float(s_C), float(s_B)],
+            [float(s_AC), float(s_CB)],
+            [background, background],
+            clamp_root=True, include_parent_bias=True)
+        samples = run_binary_sampling(graph, seed=seed, n_batches=n_batches)
+        root_bits = np.asarray(samples["root_bits"]).flatten()
+        A_pos = root_bits > 0
+        if int(A_pos.sum()) == 0:
+            s_AB = float("nan")
+        else:
+            B_all = np.asarray(samples["vmap_samples"][1][:, :, 0])
+            B_sel = B_all[A_pos]
+            s_AB = float((B_sel > 0).mean())
+        # n-path confidence from PLN abduction formula
+        c_AB = c_abduction(s_AC, c_AC, s_BC, c_BC)
+        return s_AB, c_AB, _iterative_meta([(s_AB, c_AB)], converged=True)
+
+    # n-path: c from PLN formula (same for all legacy methods)
+    c_AB = c_abduction(s_AC, c_AC, s_BC, c_BC)
 
     # ── MFC: binary Ising + mean-field constraint bias feedback ──────
     if method == "mfc":
@@ -362,31 +336,10 @@ def unified_inversion(s_A, c_A, s_B, c_B, s_AB, c_AB, method="bayes",
     elif method == "binary":
         if n_batches is None:
             n_batches = DEFAULT_BINARY_N_BATCHES
-        # Build all-free 2-node graph with CORRECT joint distribution.
-        # Use _joint_ising_params to get biases that account for coupling,
-        # unlike prior_bias() which assumes isolated nodes.
-        from pln_thrml.compiler_binary import (
-            SpinNode, SpinEBMFactor, Block, _assemble_binary_graph_ex,
-        )
-        import jax.numpy as jnp
-
         # Use PLN base rate so P(B) in joint = s_B (independent evidence)
         bg_raw = (float(s_B) - float(s_A) * float(s_AB)) / max(1.0 - float(s_A), 1e-7)
         bg = max(min(bg_raw, 0.98), 0.01) if 0.0 < bg_raw < 1.0 else background
-        J, h_A, h_B = _joint_ising_params(s_A, s_AB, bg)
-        spins = [SpinNode(), SpinNode()]
-        blocks = [Block([s]) for s in spins]
-        factors = []
-        if abs(J) > 1e-10:
-            factors.append(SpinEBMFactor(
-                [blocks[0], blocks[1]], jnp.array([J])))
-        if abs(h_A) > 1e-10:
-            factors.append(SpinEBMFactor([blocks[0]], jnp.array([h_A])))
-        if abs(h_B) > 1e-10:
-            factors.append(SpinEBMFactor([blocks[1]], jnp.array([h_B])))
-        graph = _assemble_binary_graph_ex(
-            spins, blocks, blocks, [], factors, root_prior=None)
-
+        graph = compile_binary_joint_2node(s_A, s_AB, bg)
         samples = run_binary_sampling(graph, seed=seed, n_batches=n_batches)
         # P(A|B): target=A(node0), condition=B(node1)
         s_BA = _binary_conditional(samples, graph, 0, 1)

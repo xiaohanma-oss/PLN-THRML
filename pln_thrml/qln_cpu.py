@@ -13,7 +13,7 @@ Revision uses QLN formula (n_rev = n₁ + n₂) per Definition 3.9 of the QLN
 paper, which differs from upstream PLN (w_rev = w₁ + w₂) by ~2 pseudocounts.
 """
 
-from pln_thrml.beta import c2w, w2c, EPS
+from pln_thrml.pln_utils import c2w, w2c, EPS
 
 __all__ = [
     "c_modus_ponens",

@@ -24,6 +24,8 @@ TSU hardware mapping:
   - ~12 neighbour budget → up to 12 implication edges per proposition
 """
 
+import math
+
 import numpy as np
 import jax
 import jax.numpy as jnp
@@ -34,7 +36,7 @@ from thrml.block_management import Block
 from thrml.block_sampling import BlockGibbsSpec, SamplingSchedule, sample_states
 from thrml.factor import FactorSamplingProgram
 
-from pln_thrml.beta import EPS, DEFAULT_EPSILON
+from pln_thrml.pln_utils import EPS, DEFAULT_EPSILON
 
 
 __all__ = [
@@ -48,7 +50,10 @@ __all__ = [
     "compile_joint_categorical",
     "run_joint_sampling",
     "estimate_joint_marginal",
+    "estimate_joint_conditional",
     "compile_binary_chain_with_hidden",
+    "compile_binary_joint_2node",
+    "_binary_conditional",
 ]
 
 # Default sampling schedule — lighter than one-hot (no exclusion constraints,
@@ -133,6 +138,33 @@ def prior_bias(s):
     return 0.5 * np.log(s / (1.0 - s))
 
 
+def _joint_ising_params(s_parent, s_link, background=DEFAULT_EPSILON):
+    """Compute BOTH Ising biases from the full joint distribution.
+
+    Unlike prior_bias(s) which assumes the node is isolated, this
+    computes h_parent that gives the correct marginal P(parent)
+    even in the presence of coupling J.  This is what LBM does
+    implicitly — encode the correct joint, not just the conditional.
+
+    Returns (J, h_parent, h_child).
+    """
+    s = max(min(float(s_link), 1.0 - 1e-7), 1e-7)
+    bg = max(min(float(background), 1.0 - 1e-7), 1e-7)
+    sp = max(min(float(s_parent), 1.0 - 1e-7), 1e-7)
+
+    # Full joint: P(A,B) = P(B|A) × P(A)
+    p_tt = sp * s
+    p_tf = sp * (1.0 - s)
+    p_ft = (1.0 - sp) * bg
+    p_ff = (1.0 - sp) * (1.0 - bg)
+
+    J = 0.25 * math.log(p_tt * p_ff / max(p_tf * p_ft, 1e-30))
+    h_parent = 0.25 * math.log(p_tt * p_tf / max(p_ft * p_ff, 1e-30))
+    h_child = 0.25 * math.log(p_tt * p_ft / max(p_tf * p_ff, 1e-30))
+
+    return J, h_parent, h_child
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 #  Graph builders
 # ═══════════════════════════════════════════════════════════════════════════
@@ -164,7 +196,7 @@ def _assemble_binary_graph_ex(spins, blocks, free_blocks, clamped_blocks,
 
 
 def compile_binary_chain(priors, strengths, backgrounds=None,
-                         clamp_root=True):
+                         clamp_root=True, include_parent_bias=False):
     """Build a binary Ising factor graph for a directed chain.
 
     Topology: X₀ → X₁ → ... → Xₙ₋₁
@@ -220,6 +252,18 @@ def compile_binary_chain(priors, strengths, backgrounds=None,
         if abs(h_corr) > 1e-10:
             factors.append(SpinEBMFactor(
                 [blocks[i + 1]], jnp.array([h_corr])))
+        # Parent bias contribution from log P(child|parent) CPT expansion:
+        #   μ = (1/4) · ln[s·(1-s) / (bg·(1-bg))].
+        # Needed for exact Markov-chain Boltzmann marginals when the parent
+        # is free (not clamped). No effect when parent is the clamped root.
+        if include_parent_bias and not (clamp_root and i == 0):
+            s = float(np.clip(strengths[i], EPS, 1.0 - EPS))
+            bg = float(np.clip(backgrounds[i], EPS, 1.0 - EPS))
+            h_parent = 0.25 * (np.log(s * (1.0 - s))
+                               - np.log(bg * (1.0 - bg)))
+            if abs(h_parent) > 1e-10:
+                factors.append(SpinEBMFactor(
+                    [blocks[i]], jnp.array([h_parent])))
 
     return _assemble_binary_graph_ex(
         spins, blocks, free_blocks, clamped_blocks, factors,
@@ -432,6 +476,64 @@ def estimate_binary_marginal(samples_dict, graph, node_idx):
     return float(jnp.mean(spin_data))
 
 
+def _binary_conditional(samples_dict, graph, target_idx, condition_idx):
+    """Estimate P(target=T | condition=T) from binary Ising samples.
+
+    For all-free graphs (no clamped root): node_idx maps directly to
+    vmap_samples index.  Used for inversion P(A|B) and similar queries.
+    """
+    vmap_samples = samples_dict["vmap_samples"]
+    # All-free graph: node_idx maps directly to vmap_samples index
+    target = vmap_samples[target_idx][:, :, 0]      # [n_batches, n_samples]
+    condition = vmap_samples[condition_idx][:, :, 0]  # [n_batches, n_samples]
+
+    # Spin values are 0.0 or 1.0 (mapped from {-1, +1})
+    cond_true = condition > 0.5
+    both_true = cond_true & (target > 0.5)
+
+    n_cond = float(jnp.sum(cond_true))
+    if n_cond < 1.0:
+        return 0.5  # fallback if condition is never true
+    return float(jnp.sum(both_true)) / n_cond
+
+
+def compile_binary_joint_2node(s_parent, s_link, background=DEFAULT_EPSILON):
+    """Build all-free 2-node Ising graph encoding joint P(A,B).
+
+    Uses _joint_ising_params to compute biases that account for coupling,
+    unlike prior_bias() which assumes isolated nodes.
+
+    Node 0 = parent (A), Node 1 = child (B).
+
+    Parameters
+    ----------
+    s_parent : float
+        Prior strength of the parent node (P(A)).
+    s_link : float
+        Conditional strength P(B|A).
+    background : float
+        Background rate P(B|¬A).
+
+    Returns
+    -------
+    graph : dict
+        Sampling-ready graph dict (all nodes free).
+    """
+    J, h_A, h_B = _joint_ising_params(s_parent, s_link, background)
+    spins = [SpinNode(), SpinNode()]
+    blocks = [Block([s]) for s in spins]
+    factors = []
+    if abs(J) > 1e-10:
+        factors.append(SpinEBMFactor(
+            [blocks[0], blocks[1]], jnp.array([J])))
+    if abs(h_A) > 1e-10:
+        factors.append(SpinEBMFactor([blocks[0]], jnp.array([h_A])))
+    if abs(h_B) > 1e-10:
+        factors.append(SpinEBMFactor([blocks[1]], jnp.array([h_B])))
+    return _assemble_binary_graph_ex(
+        spins, blocks, blocks, [], factors, root_prior=None)
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 #  QLN block-diagonal: joint categorical (pdit K=2^n)
 # ═══════════════════════════════════════════════════════════════════════════
@@ -556,6 +658,30 @@ def estimate_joint_marginal(all_samples, graph, prop_idx):
         counts_total += len(bits)
 
     return float(counts_true) / float(counts_total)
+
+
+def estimate_joint_conditional(all_samples, graph, target_idx,
+                               condition_idx, condition_value=1):
+    """Estimate P(target = True | condition = condition_value) from joint samples.
+
+    Filters samples where `condition_idx` bit equals `condition_value`, then
+    returns the proportion of those samples where `target_idx` bit is 1.
+    Returns NaN if the conditioning event has zero samples.
+    """
+    counts_target_and_cond = 0
+    counts_cond = 0
+
+    for batch_samples in all_samples:
+        cat_samples = np.asarray(batch_samples[0][:, 0])
+        target_bits = (cat_samples >> target_idx) & 1
+        cond_bits = (cat_samples >> condition_idx) & 1
+        mask = (cond_bits == condition_value)
+        counts_cond += int(mask.sum())
+        counts_target_and_cond += int((target_bits & mask).sum())
+
+    if counts_cond == 0:
+        return float("nan")
+    return float(counts_target_and_cond) / float(counts_cond)
 
 
 # ═══════════════════════════════════════════════════════════════════════════

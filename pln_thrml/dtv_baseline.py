@@ -14,7 +14,7 @@ the resulting distribution's moments.
 import numpy as np
 from scipy.stats import beta as beta_dist
 
-from pln_thrml.beta import stv_to_beta_params, w2c, EPS
+from pln_thrml.pln_utils import stv_to_beta_params, w2c, EPS
 
 
 __all__ = [
@@ -120,18 +120,20 @@ def dtv_deduction(s_A, c_A, s_B, c_B, s_C, c_C,
 
 
 def dtv_abduction(s_A, c_A, s_B, c_B, s_AC, c_AC, s_BC, c_BC,
+                  s_C=None, c_C=None,
                   n_samples=200_000, seed=42):
-    """DTV ground truth for Abduction: P(A|B) given A←C→B structure.
+    """DTV ground truth for Abduction (PLN book Ch 5.4).
 
-    Explaining-away: observing B makes A less likely if both explain C.
-    Samples from 4 Beta distributions:
-        a ~ Beta(α_A, β_A)
-        b ~ Beta(α_B, β_B)
-        ac ~ Beta(α_AC, β_AC)
-        bc ~ Beta(α_BC, β_BC)
+    Topology: A → C ← B (inv-V, shared effect C).
+    Target: s_AB = P(B|A), the correlation between causes induced by
+    their shared effect.
 
-    PLN abduction formula per sample:
-        s_AB = ac * bc + (1 - ac) * (b - a * bc) / (1 - a)
+    PLN book Ch 5.4 formula (after renaming book's A,B,C to our A,C,B):
+        s_AB = s_AC·s_BC·s_B/s_C + (1-s_AC)(1-s_BC)·s_B/(1-s_C)
+
+    This is Deduction∘Inversion: invert B→C into C→B, then chain A→C→B.
+    Requires s_C (shared effect's prior) as input.  If not provided,
+    estimated via Noisy-OR: s_C ≈ 1 − (1−s_A·s_AC)(1−s_B·s_BC).
 
     Returns (strength, confidence) estimated from output distribution.
     """
@@ -147,10 +149,18 @@ def dtv_abduction(s_A, c_A, s_B, c_B, s_AC, c_AC, s_BC, c_BC,
     ac = beta_dist.rvs(alpha_AC, beta_AC, size=n_samples, random_state=rng)
     bc = beta_dist.rvs(alpha_BC, beta_BC, size=n_samples, random_state=rng)
 
-    # PLN abduction: s_AB = ac * bc + (1 - ac) * (b - a * bc) / (1 - a)
-    denom = np.maximum(1.0 - a, EPS)
-    numerator = b - a * bc
-    s_AB = ac * bc + (1.0 - ac) * numerator / denom
+    if s_C is None:
+        # Noisy-OR estimate: s_C ≈ 1 − (1−a·ac)(1−b·bc)
+        c_prior = 1.0 - (1.0 - a * ac) * (1.0 - b * bc)
+    else:
+        alpha_C, beta_C = stv_to_beta_params(s_C, c_C if c_C is not None else 0.9)
+        c_prior = beta_dist.rvs(alpha_C, beta_C, size=n_samples, random_state=rng)
+
+    # PLN book Ch 5.4 abduction:
+    #   s_AB = ac·bc·b/c + (1-ac)(1-bc)·b/(1-c)
+    c_prior = np.clip(c_prior, EPS, 1.0 - EPS)
+    s_AB = (ac * bc * b / c_prior
+            + (1.0 - ac) * (1.0 - bc) * b / (1.0 - c_prior))
 
     s_AB = np.clip(s_AB, EPS, 1.0 - EPS)
 
@@ -200,7 +210,7 @@ def dtv_revision(s1, c1, s2, c2, n_samples=200_000, seed=42):
 
     Returns (strength, confidence) estimated from output distribution.
     """
-    from pln_thrml.beta import c2w
+    from pln_thrml.pln_utils import c2w
 
     rng = np.random.default_rng(seed)
 

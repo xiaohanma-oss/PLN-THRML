@@ -1,11 +1,10 @@
 """
-Six-column precision comparison: DTV | PLN | Cat | OH-Full | Binary Ising | Hybrid (s+c).
+Four-column precision comparison: DTV | PLN | Binary Ising | Hybrid (s+c).
 
 Validates the (ρ, n) separation architecture:
   - ρ → s: binary Ising sampling (1 pbit per proposition, exact 2×2 encoding)
   - n → c: PLN closed-form formulas (deterministic algebra)
 
-Extends test_hardware_approximation's five-column pattern with Binary and Hybrid columns.
 All Δ values are measured against DTV (continuous Beta MC, zero discretisation error).
 """
 
@@ -19,19 +18,13 @@ from pln_thrml.compiler_binary import (
 )
 from pln_thrml.hybrid import (
     hybrid_modus_ponens, hybrid_deduction, hybrid_abduction,
+    hybrid_inversion,
     hybrid_deduction_joint, hybrid_deduction_hidden,
     hybrid_deduction_corrected,
     hybrid_deduction_tempered,
     hybrid_deduction_pmode,
 )
-from pln_thrml.beta import (
-    build_beta_chain, run_beta_sampling, estimate_beta_marginal,
-    SamplingSchedule,
-)
-from pln_thrml.dtv_baseline import dtv_modus_ponens, dtv_deduction, dtv_abduction
-from pln_thrml.compiler_onehot import (
-    compile_onehot_full, run_onehot_sampling, estimate_onehot_marginal,
-)
+from pln_thrml.dtv_baseline import dtv_modus_ponens, dtv_deduction, dtv_abduction, dtv_inversion
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -58,8 +51,14 @@ ABDUCTION_PARAMS = [
      "s_AC": 0.7, "c_AC": 0.9, "s_BC": 0.6, "c_BC": 0.85, "id": "asymmetric"},
 ]
 
-OH_SCHEDULE = SamplingSchedule(n_warmup=1000, n_samples=3000, steps_per_sample=4)
-OH_N_BATCHES = 30
+INVERSION_PARAMS = [
+    {"s_A": 0.7, "c_A": 0.9, "s_B": 0.7, "c_B": 0.9,
+     "s_AB": 0.8, "c_AB": 0.85, "id": "symmetric"},
+    {"s_A": 0.8, "c_A": 0.9, "s_B": 0.3, "c_B": 0.85,
+     "s_AB": 0.9, "c_AB": 0.9, "id": "asymmetric"},
+    {"s_A": 0.5, "c_A": 0.7, "s_B": 0.9, "c_B": 0.95,
+     "s_AB": 0.6, "c_AB": 0.8, "id": "weak_premise"},
+]
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -82,40 +81,10 @@ def _pln_formula_abduction(p):
             + (1.0 - p["s_AC"]) * (p["s_B"] - p["s_A"] * p["s_BC"]) / denom)
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-#  Helpers: existing methods (for six-column comparison)
-# ═══════════════════════════════════════════════════════════════════════════
-
-def _cat_mp(p, k):
-    """Categorical MP (from beta.py)."""
-    g = build_beta_chain(
-        [p["s_A"], 0.5], [p["c_A"], 0.01],
-        [p["s_AB"]], [p["c_AB"]], [0.02], k=k, clamp_root=False)
-    s = run_beta_sampling(g, seed=42)
-    _, strength, conf = estimate_beta_marginal(s, g, g["nodes"][1])
-    return strength, conf
-
-
-def _cat_deduction(p, k):
-    """Categorical deduction (from beta.py)."""
-    g = build_beta_chain(
-        [p["s_A"], p["s_B"], p["s_C"]],
-        [p["c_A"], p["c_B"], p["c_C"]],
-        [p["s_AB"], p["s_BC"]], [p["c_AB"], p["c_BC"]],
-        [0.02, 0.02], k=k, clamp_root=False)
-    s = run_beta_sampling(g, seed=42)
-    _, strength, conf = estimate_beta_marginal(s, g, g["nodes"][2])
-    return strength, conf
-
-
-def _oh_full_mp(p, k):
-    """One-hot full MP (from compiler_onehot)."""
-    g = compile_onehot_full(k, [p["s_A"], 0.5], [p["c_A"], 0.01],
-                            [p["s_AB"]], [p["c_AB"]], [0.02])
-    samps = run_onehot_sampling(g, seed=42, n_batches=OH_N_BATCHES,
-                                schedule=OH_SCHEDULE)
-    _, strength, conf = estimate_onehot_marginal(samps, g, 1)
-    return strength, conf
+def _pln_formula_inversion(p):
+    """PLN Inversion (Bayes): s_BA = s_AB × s_A / s_B."""
+    s_B = max(p["s_B"], 1e-7)
+    return min(p["s_AB"] * p["s_A"] / s_B, 1.0)
 
 
 def _binary_mp(p):
@@ -181,32 +150,26 @@ class TestIsingParams:
 #  Test: Six-column Δ(DTV) comparison
 # ═══════════════════════════════════════════════════════════════════════════
 
-class TestSixColumnComparison:
-    """Six-column precision table with DTV as baseline.
+class TestFourColumnComparison:
+    """Four-column precision table with DTV as baseline.
 
-    Extends test_hardware_approximation's five-column format:
-    DTV | PLN | Cat | OH-Full | Binary Ising | Hybrid (s+c)
+    DTV | PLN | Binary Ising | Hybrid (s+c)
 
     All Δ = abs(s_dtv - s_xxx).
     """
 
     @pytest.mark.parametrize("p", MP_PARAMS, ids=lambda p: p["id"])
     def test_modus_ponens(self, p, capsys):
-        k = 4
         s_dtv, _ = dtv_modus_ponens(p["s_A"], p["c_A"], p["s_AB"], p["c_AB"])
         s_pln = _pln_formula_mp(p)
-        s_cat, _ = _cat_mp(p, k)
-        s_oh, _ = _oh_full_mp(p, k)
         s_bin = _binary_mp(p)
         s_hyb, c_hyb = hybrid_modus_ponens(
             p["s_A"], p["c_A"], p["s_AB"], p["c_AB"])
         c_pln = p["c_A"] * p["c_AB"]
 
         with capsys.disabled():
-            print(f"\n  MP({p['id']}) K={k}: DTV={s_dtv:.3f} | "
+            print(f"\n  MP({p['id']}): DTV={s_dtv:.3f} | "
                   f"PLN Δ={abs(s_dtv-s_pln):.3f} | "
-                  f"Cat Δ={abs(s_dtv-s_cat):.3f} | "
-                  f"OH Δ={abs(s_dtv-s_oh):.3f} | "
                   f"Bin Δ={abs(s_dtv-s_bin):.3f} | "
                   f"Hyb Δ={abs(s_dtv-s_hyb):.3f} | "
                   f"Hyb c={c_hyb:.3f} PLN c={c_pln:.3f}")
@@ -220,12 +183,10 @@ class TestSixColumnComparison:
 
     @pytest.mark.parametrize("p", DEDUCTION_PARAMS, ids=lambda p: p["id"])
     def test_deduction(self, p, capsys):
-        k = 4
         s_dtv, _ = dtv_deduction(
             p["s_A"], p["c_A"], p["s_B"], p["c_B"], p["s_C"], p["c_C"],
             p["s_AB"], p["c_AB"], p["s_BC"], p["c_BC"])
         s_pln = _pln_formula_deduction(p)
-        s_cat, _ = _cat_deduction(p, k)
         s_bin = _binary_deduction(p)
         s_hyb, c_hyb = hybrid_deduction(
             p["s_A"], p["c_A"], p["s_B"], p["c_B"], p["s_C"], p["c_C"],
@@ -233,9 +194,8 @@ class TestSixColumnComparison:
         c_pln = p["s_AB"] * p["s_BC"] * p["c_AB"] * p["c_BC"]
 
         with capsys.disabled():
-            print(f"\n  Ded({p['id']}) K={k}: DTV={s_dtv:.3f} | "
+            print(f"\n  Ded({p['id']}): DTV={s_dtv:.3f} | "
                   f"PLN Δ={abs(s_dtv-s_pln):.3f} | "
-                  f"Cat Δ={abs(s_dtv-s_cat):.3f} | "
                   f"Bin Δ={abs(s_dtv-s_bin):.3f} | "
                   f"Hyb Δ={abs(s_dtv-s_hyb):.3f} | "
                   f"Hyb c={c_hyb:.3f} PLN c={c_pln:.3f}")
@@ -265,6 +225,33 @@ class TestSixColumnComparison:
         # for binary variables); document the gap rather than fail.
         assert s_hyb > 0.0, "Hybrid abduction should return positive strength"
 
+    @pytest.mark.parametrize("p", INVERSION_PARAMS, ids=lambda p: p["id"])
+    def test_inversion(self, p, capsys):
+        s_dtv, _ = dtv_inversion(
+            p["s_A"], p["c_A"], p["s_B"], p["c_B"],
+            p["s_AB"], p["c_AB"])
+        s_pln = _pln_formula_inversion(p)
+        s_hyb, c_hyb = hybrid_inversion(
+            p["s_A"], p["c_A"], p["s_B"], p["c_B"],
+            p["s_AB"], p["c_AB"])
+
+        with capsys.disabled():
+            print(f"\n  Inv({p['id']}): DTV={s_dtv:.3f} | "
+                  f"PLN Δ={abs(s_dtv-s_pln):.3f} | "
+                  f"Hyb Δ={abs(s_dtv-s_hyb):.3f} | "
+                  f"Hyb c={c_hyb:.3f}")
+
+        # When bg_raw = (s_B - s_A·s_AB)/(1-s_A) is outside [0,1], the
+        # 2-node Ising model can't encode the joint faithfully (same
+        # class of limitation as binary abduction).  Only assert tight
+        # tolerance when the model is valid.
+        bg_raw = (p["s_B"] - p["s_A"] * p["s_AB"]) / max(1.0 - p["s_A"], 1e-7)
+        if 0.0 < bg_raw < 1.0:
+            assert abs(s_dtv - s_hyb) < 0.15, (
+                f"Hybrid Inversion too far from DTV: Δ={abs(s_dtv-s_hyb):.4f}")
+        else:
+            assert 0.0 <= s_hyb <= 1.0, "Hybrid inversion should return valid strength"
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  Test: Hallucination bound (evidence monotonicity)
@@ -290,6 +277,16 @@ class TestHallucinationBound:
             p["s_AB"], p["c_AB"], p["s_BC"], p["c_BC"])
         assert c_hyb <= min(p["c_AB"], p["c_BC"]) + 0.001, (
             f"c_AC={c_hyb:.4f} > min(c_AB, c_BC)={min(p['c_AB'], p['c_BC']):.4f}")
+
+    @pytest.mark.parametrize("p", INVERSION_PARAMS, ids=lambda p: p["id"])
+    def test_inversion_c_bounded(self, p):
+        """c_BA must not exceed min input evidence."""
+        _, c_BA = hybrid_inversion(
+            p["s_A"], p["c_A"], p["s_B"], p["c_B"],
+            p["s_AB"], p["c_AB"])
+        assert c_BA <= min(p["c_A"], p["c_B"], p["c_AB"]) + 0.001, (
+            f"c_BA={c_BA:.4f} > min(c_inputs)="
+            f"{min(p['c_A'], p['c_B'], p['c_AB']):.4f}")
 
 
 # ═══════════════════════════════════════════════════════════════════════════

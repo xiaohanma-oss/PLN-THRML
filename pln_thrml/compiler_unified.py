@@ -21,9 +21,10 @@ The default g(n) = min(sqrt(n/2), 10) is a design choice balancing:
 
 import math
 
+import numpy as np
 import jax.numpy as jnp
 
-from pln_thrml.beta import c2w, DEFAULT_EPSILON
+from pln_thrml.pln_utils import c2w, EPS, DEFAULT_EPSILON
 from pln_thrml.compiler_binary import (
     ising_params,
     prior_bias,
@@ -32,6 +33,21 @@ from pln_thrml.compiler_binary import (
     Block,
     _assemble_binary_graph_ex,
 )
+
+
+def _parent_bias(strength, background):
+    """Parent-bias μ from the full log-joint expansion of a CPT edge.
+
+    μ = (1/4) · ln[s·(1-s) / (bg·(1-bg))]
+
+    Needed on the parent node for exact Boltzmann marginals when the
+    parent is free (not clamped).  Missing μ was the root cause of the
+    Deduction Chain bias (fixed via include_parent_bias=True) and of
+    the inv-V Abduction bias (fixed here).
+    """
+    s = float(np.clip(strength, EPS, 1.0 - EPS))
+    bg = float(np.clip(background, EPS, 1.0 - EPS))
+    return 0.25 * (np.log(s * (1.0 - s)) - np.log(bg * (1.0 - bg)))
 
 __all__ = [
     "default_g_fn",
@@ -165,6 +181,7 @@ def compile_modulated_inv_v(left_prior, right_prior,
 
     # Left → Center (modulated)
     J_left, h_corr_left = ising_params(left_strength, left_background)
+    mu_left = _parent_bias(left_strength, left_background)
     scale_left = g_fn(_confidence_to_n(left_confidence))
     # Scale J only, NOT h_corr — both edges' h_corrections land on center,
     # scaling them amplifies the encoding artifact and overwhelms the coupling.
@@ -173,15 +190,23 @@ def compile_modulated_inv_v(left_prior, right_prior,
             [blocks[0], blocks[1]], jnp.array([J_left * scale_left])))
     if abs(h_corr_left) > 1e-10:
         factors.append(SpinEBMFactor([blocks[1]], jnp.array([h_corr_left])))
+    # Parent-bias μ on left (A): missing in the original inv-V compiler,
+    # caused Abduction Δ up to 0.65.  Added here to match the full 4-term
+    # expansion of ln P(a,b,c) for multi-parent DAGs.
+    if abs(mu_left) > 1e-10:
+        factors.append(SpinEBMFactor([blocks[0]], jnp.array([mu_left])))
 
     # Right → Center: scale J only
     J_right, h_corr_right = ising_params(right_strength, right_background)
+    mu_right = _parent_bias(right_strength, right_background)
     scale_right = g_fn(_confidence_to_n(right_confidence))
     if abs(J_right * scale_right) > 1e-10:
         factors.append(SpinEBMFactor(
             [blocks[2], blocks[1]], jnp.array([J_right * scale_right])))
     if abs(h_corr_right) > 1e-10:
         factors.append(SpinEBMFactor([blocks[1]], jnp.array([h_corr_right])))
+    if abs(mu_right) > 1e-10:
+        factors.append(SpinEBMFactor([blocks[2]], jnp.array([mu_right])))
 
     return _assemble_binary_graph_ex(
         spins, blocks, blocks, [], factors, root_prior=None)
@@ -246,6 +271,7 @@ def compile_modulated_inv_v_with_hidden(
 
     # Left(A) → Center(C): scale J only, NOT h_corr (same inv-V reason)
     J_left, h_corr_left = ising_params(left_strength, left_background)
+    mu_left = _parent_bias(left_strength, left_background)
     scale_left = g_fn(_confidence_to_n(left_confidence))
     if abs(J_left * scale_left) > 1e-10:
         factors.append(SpinEBMFactor(
@@ -253,9 +279,13 @@ def compile_modulated_inv_v_with_hidden(
     if abs(h_corr_left) > 1e-10:
         factors.append(SpinEBMFactor(
             [vis_blocks[1]], jnp.array([h_corr_left])))
+    if abs(mu_left) > 1e-10:
+        factors.append(SpinEBMFactor(
+            [vis_blocks[0]], jnp.array([mu_left])))
 
     # Right(B) → Center(C): scale J only
     J_right, h_corr_right = ising_params(right_strength, right_background)
+    mu_right = _parent_bias(right_strength, right_background)
     scale_right = g_fn(_confidence_to_n(right_confidence))
     if abs(J_right * scale_right) > 1e-10:
         factors.append(SpinEBMFactor(
@@ -263,6 +293,9 @@ def compile_modulated_inv_v_with_hidden(
     if abs(h_corr_right) > 1e-10:
         factors.append(SpinEBMFactor(
             [vis_blocks[1]], jnp.array([h_corr_right])))
+    if abs(mu_right) > 1e-10:
+        factors.append(SpinEBMFactor(
+            [vis_blocks[2]], jnp.array([mu_right])))
 
     # Hidden unit: causal competition (explaining-away)
     # C true → h activates → suppresses both A and B (they compete)

@@ -40,7 +40,8 @@ from pln_thrml.qln_cpu import (
     revision,
 )
 from pln_thrml.compiler_unified import default_g_fn
-from pln_thrml.beta import c2w, w2c
+from pln_thrml.pln_utils import c2w, w2c
+from tests.conftest import STRENGTH_TOL
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -61,10 +62,13 @@ DEDUCTION_PARAMS = [
 ]
 
 ABDUCTION_PARAMS = [
+    # s_C is PLN book Ch 5.4 required input; default Noisy-OR point estimate
     {"s_A": 0.8, "c_A": 0.9, "s_B": 0.7, "c_B": 0.85,
-     "s_AC": 0.9, "c_AC": 0.85, "s_BC": 0.8, "c_BC": 0.9, "id": "standard"},
+     "s_AC": 0.9, "c_AC": 0.85, "s_BC": 0.8, "c_BC": 0.9,
+     "s_C": 0.877, "c_C": 0.85, "id": "standard"},
     {"s_A": 0.5, "c_A": 0.8, "s_B": 0.9, "c_B": 0.9,
-     "s_AC": 0.7, "c_AC": 0.9, "s_BC": 0.6, "c_BC": 0.85, "id": "asymmetric"},
+     "s_AC": 0.7, "c_AC": 0.9, "s_BC": 0.6, "c_BC": 0.85,
+     "s_C": 0.701, "c_C": 0.8, "id": "asymmetric"},
 ]
 
 INVERSION_PARAMS = [
@@ -227,34 +231,47 @@ class TestUnifiedDeduction:
 # ═══════════════════════════════════════════════════════════════════════════
 
 class TestUnifiedAbduction:
-    """Unified Abduction: four methods compared against DTV."""
+    """Unified Abduction: chain method (PLN Ch 5.4) + legacy methods vs DTV."""
 
     @pytest.mark.parametrize("p", ABDUCTION_PARAMS, ids=lambda p: p["id"])
-    def test_four_methods(self, p, capsys):
+    def test_chain_within_tolerance(self, p, capsys):
+        """Chain method (Deduction∘Inversion) should satisfy Δs<0.05 tolerance."""
         kw = dict(s_A=p["s_A"], c_A=p["c_A"], s_B=p["s_B"], c_B=p["c_B"],
-                  s_AC=p["s_AC"], c_AC=p["c_AC"], s_BC=p["s_BC"], c_BC=p["c_BC"])
+                  s_AC=p["s_AC"], c_AC=p["c_AC"], s_BC=p["s_BC"], c_BC=p["c_BC"],
+                  s_C=p["s_C"], c_C=p["c_C"])
         s_dtv, _ = dtv_abduction(**kw)
-
-        s_bin, _, _ = unified_abduction(**kw, method="binary")
-        s_hid, _, _ = unified_abduction(**kw, method="binary_hidden")
-        s_mfc, _, meta_mfc = unified_abduction(**kw, method="mfc", max_rounds=5)
-        s_kbin, _, _ = unified_abduction(**kw, method="kbin", k=16)
+        s_chain, c_chain, _ = unified_abduction(**kw, method="chain")
 
         with capsys.disabled():
             print(f"\n  Abd [{p['id']}]:"
                   f"  DTV={s_dtv:.3f}"
+                  f"  chain={s_chain:.3f}(Δ={abs(s_dtv-s_chain):.3f})"
+                  f"  c={c_chain:.3f}")
+
+        assert abs(s_dtv - s_chain) < STRENGTH_TOL, \
+            f"chain Δ={abs(s_dtv-s_chain):.3f} exceeds {STRENGTH_TOL}"
+        assert 0.0 <= s_chain <= 1.0
+
+    @pytest.mark.parametrize("p", ABDUCTION_PARAMS, ids=lambda p: p["id"])
+    def test_legacy_methods(self, p, capsys):
+        """Legacy methods (binary/binary_hidden/mfc) — kept for regression tracking."""
+        kw = dict(s_A=p["s_A"], c_A=p["c_A"], s_B=p["s_B"], c_B=p["c_B"],
+                  s_AC=p["s_AC"], c_AC=p["c_AC"], s_BC=p["s_BC"], c_BC=p["c_BC"],
+                  s_C=p["s_C"], c_C=p["c_C"])
+        s_dtv, _ = dtv_abduction(**kw)
+        s_bin, _, _ = unified_abduction(**kw, method="binary")
+        s_hid, _, _ = unified_abduction(**kw, method="binary_hidden")
+        s_mfc, _, meta_mfc = unified_abduction(**kw, method="mfc", max_rounds=5)
+
+        with capsys.disabled():
+            print(f"\n  Abd [{p['id']}] legacy:"
+                  f"  DTV={s_dtv:.3f}"
                   f"  Bin={s_bin:.3f}(Δ={abs(s_dtv-s_bin):.3f})"
                   f"  Hid={s_hid:.3f}(Δ={abs(s_dtv-s_hid):.3f})"
                   f"  MFC={s_mfc:.3f}(Δ={abs(s_dtv-s_mfc):.3f})"
-                  f"  Kbin={s_kbin:.3f}(Δ={abs(s_dtv-s_kbin):.3f})"
                   f"  MFC-rnds={meta_mfc['rounds']}")
 
-        # All methods should produce valid probabilities.
-        # Asymmetric case has large Δ for ALL methods — the inv-V center
-        # marginal P(C) diverges from PLN formula s_AB when priors are
-        # highly asymmetric.  This is a conceptual mismatch, not just
-        # precision.  The comparison table is the main output.
-        for s in [s_bin, s_hid, s_mfc, s_kbin]:
+        for s in [s_bin, s_hid, s_mfc]:
             assert 0.0 <= s <= 1.0
 
 

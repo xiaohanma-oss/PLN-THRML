@@ -9,21 +9,25 @@ Orchestrates the hybrid PLN architecture:
 These two computations have NO data dependency and can run in parallel on
 different hardware (TSU for s, GPU/CPU for c).
 
-Currently covers: Modus Ponens, Deduction, Abduction.
+Currently covers: Modus Ponens, Deduction, Abduction, Inversion.
 """
 
 from pln_thrml.compiler_binary import (
     compile_binary_chain,
     compile_binary_inv_v,
     compile_binary_chain_with_hidden,
+    compile_binary_joint_2node,
     compile_joint_categorical,
     run_binary_sampling,
     run_joint_sampling,
     estimate_binary_marginal,
     estimate_joint_marginal,
+    estimate_joint_conditional,
+    _binary_conditional,
     DEFAULT_BINARY_N_BATCHES,
 )
-from pln_thrml.beta import DEFAULT_EPSILON, c2w, EPS
+from pln_thrml.pln_utils import DEFAULT_EPSILON, c2w, EPS
+from pln_thrml.qln_cpu import inversion_bayes
 
 
 __all__ = [
@@ -34,8 +38,10 @@ __all__ = [
     "hybrid_deduction_tempered",
     "hybrid_deduction_pmode",
     "hybrid_deduction_joint",
+    "hybrid_deduction_pbit_joint",
     "hybrid_deduction_hidden",
     "hybrid_abduction",
+    "hybrid_inversion",
 ]
 
 
@@ -169,7 +175,7 @@ def _laplace_deduction(s_A, c_A, s_B, c_B, s_C, c_C,
     else:
         n_out = 1e4  # very high precision
 
-    from pln_thrml.beta import w2c
+    from pln_thrml.pln_utils import w2c
     c_out = w2c(max(n_out - 2.0, 0.0))
 
     return s_out, c_out
@@ -358,6 +364,56 @@ def hybrid_abduction(s_A, c_A, s_B, c_B,
     return s_center, c_AB
 
 
+def hybrid_inversion(s_A, c_A, s_B, c_B, s_AB, c_AB,
+                     background=DEFAULT_EPSILON,
+                     seed=42, n_batches=None):
+    """Hybrid Inversion: s from 2-node all-free Ising, c from Bayes formula.
+
+    Given A=(s_A, c_A), B=(s_B, c_B), and link A→B=(s_AB, c_AB),
+    infer the reversed link B→A=(s_BA, c_BA).
+
+    Uses Bayes' theorem: P(A|B) = P(B|A) × P(A) / P(B).
+
+    Parameters
+    ----------
+    s_A, c_A : float
+        Truth value for A.
+    s_B, c_B : float
+        Truth value for B.
+    s_AB, c_AB : float
+        Forward implication link A→B truth value.
+    background : float
+        Background rate (PLN epsilon).
+    seed : int
+        Random seed for sampling.
+    n_batches : int or None
+        Number of sampling batches (None → default).
+
+    Returns
+    -------
+    (s_BA, c_BA) : tuple[float, float]
+        Inferred truth value for the reversed link B→A.
+    """
+    if n_batches is None:
+        n_batches = DEFAULT_BINARY_N_BATCHES
+
+    # Derive background that makes the joint's P(B) marginal correct:
+    # P(B) = P(B|A)·P(A) + P(B|¬A)·P(¬A)  →  P(B|¬A) = (s_B - s_A·s_AB)/(1-s_A)
+    bg_raw = (float(s_B) - float(s_A) * float(s_AB)) / max(1.0 - float(s_A), 1e-7)
+    bg = max(min(bg_raw, 0.98), 0.01) if 0.0 < bg_raw < 1.0 else background
+
+    # ρ-path: 2-node all-free Ising graph encoding joint P(A,B)
+    graph = compile_binary_joint_2node(s_A, s_AB, bg)
+    samples = run_binary_sampling(graph, seed=seed, n_batches=n_batches)
+    # P(A|B): target=A (node 0), condition=B (node 1)
+    s_BA = _binary_conditional(samples, graph, 0, 1)
+
+    # n-path: Bayes confidence formula (CPU)
+    c_BA = inversion_bayes(s_A, c_A, s_B, c_B, s_AB, c_AB)[1]
+
+    return s_BA, c_BA
+
+
 def hybrid_deduction_tempered(s_A, c_A, s_B, c_B, s_C, c_C,
                               s_AB, c_AB, s_BC, c_BC,
                               background=DEFAULT_EPSILON,
@@ -512,11 +568,54 @@ def hybrid_deduction_joint(s_A, c_A, s_B, c_B, s_C, c_C,
     graph = compile_joint_categorical(
         [s_A, s_B, s_C], [s_AB, s_BC], [background, background])
     samples = run_joint_sampling(graph, seed=seed, n_batches=n_batches)
-    s_C_inferred = estimate_joint_marginal(samples, graph, 2)  # prop 2 = C
+    # PLN's s_AC = P(C=T | A=T), not the unconditional marginal P(C=T).
+    # Condition on A=T (prop 0 = A) before measuring C (prop 2).
+    s_C_inferred = estimate_joint_conditional(
+        samples, graph, target_idx=2, condition_idx=0, condition_value=1)
 
     # n-path: PLN formula
     c_AC = _c_deduction(s_AB, c_AB, s_BC, c_BC)
 
+    return s_C_inferred, c_AC
+
+
+def hybrid_deduction_pbit_joint(s_A, c_A, s_B, c_B, s_C, c_C,
+                                s_AB, c_AB, s_BC, c_BC,
+                                background=DEFAULT_EPSILON,
+                                seed=42, n_batches=None):
+    """Hybrid Deduction via single 3-spin pbit chain with parent-bias fix.
+
+    Encodes the full Markov-chain log joint P(A)·P(B|A)·P(C|B) into a
+    3-spin pairwise Ising energy using the complete expansion
+        ln P(a,b,c) = const + a·(λ_A + μ_AB) + b·(ν_AB + μ_BC) + c·ν_BC
+                              + ab·J_AB + bc·J_BC
+    where μ is the parent-bias contribution (missing from the default
+    compile path).  Gibbs-samples (B, C) jointly under stochastic A-clamp
+    and returns P(C=T | A=+1) by filtering batches on root_bits.
+
+    Unlike hybrid_deduction (two chained 2-node graphs, which collapses
+    B to a point estimate), this variant keeps B and C jointly uncertain
+    in a single chain, matching the full Bayesian posterior.
+    """
+    import numpy as np
+    if n_batches is None:
+        n_batches = DEFAULT_BINARY_N_BATCHES
+
+    graph = compile_binary_chain(
+        [s_A, 0.5, 0.5], [s_AB, s_BC], [background, background],
+        clamp_root=True, include_parent_bias=True)
+    samples = run_binary_sampling(graph, seed=seed, n_batches=n_batches)
+
+    root_bits = np.asarray(samples["root_bits"]).flatten()
+    A_pos = root_bits > 0
+    if int(A_pos.sum()) == 0:
+        s_C_inferred = float("nan")
+    else:
+        C_all = np.asarray(samples["vmap_samples"][1][:, :, 0])
+        C_sel = C_all[A_pos]
+        s_C_inferred = float((C_sel > 0).mean())
+
+    c_AC = _c_deduction(s_AB, c_AB, s_BC, c_BC)
     return s_C_inferred, c_AC
 
 
