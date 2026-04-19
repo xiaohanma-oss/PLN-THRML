@@ -1,5 +1,5 @@
 """
-pln_thrml.hybrid — (ρ, n) separation: binary Ising s + PLN formula c
+pln_thrml.hybrid — (s, n) separation: binary Ising s + PLN formula c
 =====================================================================
 
 Orchestrates the hybrid PLN architecture:
@@ -85,9 +85,9 @@ def _jensen_correction_deduction(s_B, c_B, s_C, s_BC):
     where h''(x) = 2(s_C - s_BC) / (1-x)³
     and   Var(s_B) = s_B(1-s_B) / (n_B+1).
 
-    This uses n_B (from c_B) to correct ρ — the mechanism by which
+    This uses n_B (from c_B) to correct s — the mechanism by which
     confidence count n influences the strength computation in the
-    (ρ, n) separation architecture.  Partially answers QLN Open Problem #4.
+    (s, n) separation architecture.  Partially answers QLN Open Problem #4.
     """
     s_B = float(s_B)
     denom = max(1.0 - s_B, EPS)
@@ -106,7 +106,7 @@ def _laplace_deduction(s_A, c_A, s_B, c_B, s_C, c_C,
     operating point (mean field).  Output mean and variance give (s, c).
 
     This implements the Active Inference Laplace approximation for the
-    (ρ, n) separation architecture: n information is injected into s
+    (s, n) separation architecture: n information is injected into s
     via variance, and output n is derived from output variance.
     """
     s_A, s_B, s_C = float(s_A), float(s_B), float(s_C)
@@ -211,7 +211,7 @@ def hybrid_modus_ponens(s_A, c_A, s_AB, c_AB,
     if n_batches is None:
         n_batches = DEFAULT_BINARY_N_BATCHES
 
-    # ρ-path: binary Ising sampling for s
+    # s-path: binary Ising sampling for s
     graph = compile_binary_chain(
         [s_A, 0.5], [s_AB], [background], clamp_root=True)
     samples = run_binary_sampling(graph, seed=seed, n_batches=n_batches)
@@ -227,17 +227,25 @@ def hybrid_deduction(s_A, c_A, s_B, c_B, s_C, c_C,
                      s_AB, c_AB, s_BC, c_BC,
                      background=DEFAULT_EPSILON,
                      seed=42, n_batches=None):
-    """Hybrid Deduction: s from chained binary MP, c from PLN formula.
+    """Hybrid Deduction: s from 3-spin joint chain, c from PLN formula.
 
     Given A→B→C chain, infer the composed link A→C.
-    Uses two chained clamped-root MP calls for s (compositional).
+    Encodes the full Markov-chain log joint P(A)·P(B|A)·P(C|B) into a
+    single 3-spin pairwise Ising energy (with parent-bias correction),
+    Gibbs-samples (B, C) jointly under stochastic A-clamp, and reads
+    off P(C=T | A=+1) by filtering batches on root_bits.
+
+    Previously used two independent 2-node chains, which collapsed B to
+    a point estimate and dropped the A-C correlation entirely — that
+    variant disagreed with PLN's closed-form by |Δ|≈0.1-0.3 on standard
+    parameter groups.
 
     Parameters
     ----------
     s_A, c_A : float
         Premise A truth value.
     s_B, c_B : float
-        Intermediate B truth value (used as prior context).
+        Intermediate B truth value (unused in s-path; kept for API symmetry).
     s_C, c_C : float
         Conclusion C truth value (prior, typically weak).
     s_AB, c_AB : float
@@ -250,21 +258,25 @@ def hybrid_deduction(s_A, c_A, s_B, c_B, s_C, c_C,
     (s_AC, c_AC) : tuple[float, float]
         Inferred truth value for the composed link A→C.
     """
+    import numpy as np
     if n_batches is None:
         n_batches = DEFAULT_BINARY_N_BATCHES
 
-    # ρ-path: chain two clamped-root MP calls
-    # Step 1: A → B  (clamp A, sample B)
-    graph1 = compile_binary_chain(
-        [s_A, 0.5], [s_AB], [background], clamp_root=True)
-    samples1 = run_binary_sampling(graph1, seed=seed, n_batches=n_batches)
-    s_B_inferred = estimate_binary_marginal(samples1, graph1, 1)
+    # s-path: 3-spin chain [A, B, C], clamp A stochastically, filter A=+1
+    graph = compile_binary_chain(
+        [s_A, 0.5, 0.5], [s_AB, s_BC], [background, background],
+        clamp_root=True, include_parent_bias=True)
+    samples = run_binary_sampling(graph, seed=seed, n_batches=n_batches)
 
-    # Step 2: B → C  (clamp B using inferred s_B, sample C)
-    graph2 = compile_binary_chain(
-        [s_B_inferred, 0.5], [s_BC], [background], clamp_root=True)
-    samples2 = run_binary_sampling(graph2, seed=seed + 1000, n_batches=n_batches)
-    s_C_inferred = estimate_binary_marginal(samples2, graph2, 1)
+    root_bits = np.asarray(samples["root_bits"]).flatten()
+    A_pos = root_bits > 0
+    if int(A_pos.sum()) == 0:
+        s_C_inferred = float("nan")
+    else:
+        # C is free block index 1 (B is index 0)
+        C_all = np.asarray(samples["vmap_samples"][1][:, :, 0])
+        C_sel = C_all[A_pos]
+        s_C_inferred = float((C_sel > 0).mean())
 
     # n-path: PLN closed-form formula for c
     c_AC = _c_deduction(s_AB, c_AB, s_BC, c_BC)
@@ -282,7 +294,7 @@ def hybrid_deduction_corrected(s_A, c_A, s_B, c_B, s_C, c_C,
     accounts for the nonlinear interaction between the base-rate term
     1/(1-s_B) and the uncertainty in s_B (encoded by n_B / c_B).
 
-    The correction uses n to adjust ρ — partially answering QLN Open
+    The correction uses n to adjust s — partially answering QLN Open
     Problem #4 ("Full PLN recovery: deriving PLN's (s, n) formulas
     from the QLN classical limit").
     """
@@ -324,10 +336,18 @@ def hybrid_abduction(s_A, c_A, s_B, c_B,
                      s_AC, c_AC, s_BC, c_BC,
                      background=DEFAULT_EPSILON,
                      seed=42, n_batches=None):
-    """Hybrid Abduction: s from inv-V binary Ising, c from PLN formula.
+    """Hybrid Abduction: s via PLN Ch 5.4 reduction Abduction = Deduction ∘ Inversion.
 
-    Given A→C and B→C, infer A→B (explaining away).
-    Uses inverted-V topology: A → Center ← B, query Center.
+    Given A→C and B→C, infer A→B.
+    Steps:
+      1. Derive s_C from the marginal P(C) = s_BC·s_B + bg·(1-s_B).
+      2. Invert B→C via Bayes: s_CB = s_BC·s_B/s_C.
+      3. Deduce A→C→B on a 3-spin joint chain, filter by A=+1,
+         read off P(B=T | A=+1).
+
+    Previously queried the center-node marginal of an inv-V topology,
+    which computes P(C | free A, B) rather than P(B | A) — a category
+    mismatch that produced |Δ|≈0.3-0.6 against PLN's Abduction formula.
 
     Parameters
     ----------
@@ -345,23 +365,43 @@ def hybrid_abduction(s_A, c_A, s_B, c_B,
     (s_AB, c_AB) : tuple[float, float]
         Inferred truth value for A→B.
     """
+    import numpy as np
     if n_batches is None:
         n_batches = DEFAULT_BINARY_N_BATCHES
 
-    # ρ-path: inv-V Ising graph, all free, query center
-    graph = compile_binary_inv_v(
-        left_prior=s_A, right_prior=s_B,
-        left_strength=s_AC, right_strength=s_BC,
-        left_background=background, right_background=background,
-        center_prior=0.5)
+    # Step 1: derive s_C marginal
+    s_C = float(s_BC) * float(s_B) + float(background) * (1.0 - float(s_B))
+    s_C = max(min(s_C, 1.0 - 1e-7), 1e-7)
+
+    # Step 2: Bayes inversion of B→C
+    #   Forward:  s_CB  = P(B | C)    = s_BC·s_B / s_C
+    #   Fallback: bg_CB = P(B | ¬C)   = (1-s_BC)·s_B / (1-s_C)
+    # The second link of the chain must encode both to match canonical PLN
+    # Abduction; defaulting bg_CB to DEFAULT_EPSILON (=0.02) collapses the
+    # marginal constraint and produces a 0.1-0.3 gap on asymmetric inputs.
+    s_CB = min(float(s_BC) * float(s_B) / s_C, 1.0 - 1e-7)
+    bg_CB = min(max((1.0 - float(s_BC)) * float(s_B) / (1.0 - s_C), 1e-7),
+                1.0 - 1e-7)
+
+    # Step 3: 3-spin chain [A, C, B] with links [s_AC, s_CB]
+    graph = compile_binary_chain(
+        [s_A, 0.5, 0.5], [s_AC, s_CB], [background, bg_CB],
+        clamp_root=True, include_parent_bias=True)
     samples = run_binary_sampling(graph, seed=seed, n_batches=n_batches)
-    # Center node is index 1 in inv-V [left, center, right]
-    s_center = estimate_binary_marginal(samples, graph, 1)
+
+    root_bits = np.asarray(samples["root_bits"]).flatten()
+    A_pos = root_bits > 0
+    if int(A_pos.sum()) == 0:
+        s_AB = float("nan")
+    else:
+        B_all = np.asarray(samples["vmap_samples"][1][:, :, 0])
+        B_sel = B_all[A_pos]
+        s_AB = float((B_sel > 0).mean())
 
     # n-path: PLN closed-form formula for c
     c_AB = _c_abduction(s_AC, c_AC, s_BC, c_BC)
 
-    return s_center, c_AB
+    return s_AB, c_AB
 
 
 def hybrid_inversion(s_A, c_A, s_B, c_B, s_AB, c_AB,
@@ -402,7 +442,7 @@ def hybrid_inversion(s_A, c_A, s_B, c_B, s_AB, c_AB,
     bg_raw = (float(s_B) - float(s_A) * float(s_AB)) / max(1.0 - float(s_A), 1e-7)
     bg = max(min(bg_raw, 0.98), 0.01) if 0.0 < bg_raw < 1.0 else background
 
-    # ρ-path: 2-node all-free Ising graph encoding joint P(A,B)
+    # s-path: 2-node all-free Ising graph encoding joint P(A,B)
     graph = compile_binary_joint_2node(s_A, s_AB, bg)
     samples = run_binary_sampling(graph, seed=seed, n_batches=n_batches)
     # P(A|B): target=A (node 0), condition=B (node 1)
@@ -564,7 +604,7 @@ def hybrid_deduction_joint(s_A, c_A, s_B, c_B, s_C, c_C,
     if n_batches is None:
         n_batches = DEFAULT_BINARY_N_BATCHES
 
-    # ρ-path: joint categorical sampling
+    # s-path: joint categorical sampling
     graph = compile_joint_categorical(
         [s_A, s_B, s_C], [s_AB, s_BC], [background, background])
     samples = run_joint_sampling(graph, seed=seed, n_batches=n_batches)
@@ -631,7 +671,7 @@ def hybrid_deduction_hidden(s_A, c_A, s_B, c_B, s_C, c_C,
     if n_batches is None:
         n_batches = DEFAULT_BINARY_N_BATCHES
 
-    # ρ-path: binary chain with hidden units
+    # s-path: binary chain with hidden units
     graph = compile_binary_chain_with_hidden(
         priors=[s_A, 0.5, 0.5],
         strengths=[s_AB, s_BC],

@@ -25,7 +25,7 @@
 ## Overview
 
 PLN-THRML compiles probabilistic logic inference rules into factor graphs
-that run on thermodynamic hardware. The **(ρ, n) separation architecture**
+that run on thermodynamic hardware. The **(s, n) separation architecture**
 splits each inference into two independent paths: **strength (s)** via
 Ising Gibbs sampling on TSU, **confidence (c)** via closed-form algebra
 on CPU. 5 PLN rules (MP, Deduction, Abduction, Inversion, Revision) are
@@ -175,7 +175,7 @@ python -m pytest tests/test_hybrid.py -v
 
 ## How it works
 
-### (ρ, n) separation — the main path
+### (s, n) separation — the main path
 
 1. **Compile s** — PLN's 2×2 conditional table `[1−ε, ε; 1−s_AB, s_AB]` (rows = parent F/T, cols = child F/T, ε = background rate ≈ 0.02 = P(child=T | parent=F)) maps exactly to Ising parameters: bias _h_ encodes the prior, coupling _J_ encodes the implication strength. 1 `SpinNode` per proposition.
 2. **Sample s (TSU)** — Block Gibbs sampling over Ising spins. Binary encoding means zero discretisation error for strength.
@@ -193,7 +193,7 @@ python -m pytest tests/test_hybrid.py -v
 | Deduction chain                   | Chain of Ising spins                         | Spin pipeline     |
 | Abduction (inverted-V)            | Hidden-unit topology                         | Explaining-away   |
 | Inversion (Bayes)                 | 2-node all-free joint graph                  | pbit pair         |
-| Revision                          | QLN formula: n_rev = n₁ + n₂                | CPU only          |
+| Revision                          | PLN book formula: n_rev = n₁ + n₂ (raw)     | CPU only          |
 
 ## API reference
 
@@ -239,14 +239,14 @@ Representative strength errors (Δ vs DTV continuous baseline):
 | Rule         | Unified (Ising+QLN) | Hybrid (Binary+PLN) |
 | ------------ | ------------------- | -------------------- |
 | Modus Ponens | 0.053               | 0.018                |
-| Deduction    | 0.050               | 0.085                |
-| Abduction    | 0.116               | 0.269                |
+| Deduction    | 0.050               | 0.019 (3-spin joint chain) |
+| Abduction    | 0.116               | 0.002 (Ded∘Inv reduction, Bayes-correct bg) |
 | Inversion    | 0.021 (Bayes exact) | Bayes exact          |
-| Revision     | 0.001 (QLN formula) | —                    |
+| Revision     | 0.001 (PLN book)    | —                    |
 
 All rules use the binary Ising path (1 pbit per proposition, zero
 discretisation error for strength). Inversion and Revision are CPU-only
-(Bayes formula and QLN n₁+n₂).
+(Bayes formula and PLN book n_rev = n₁ + n₂ raw counts).
 
 ## Hyperon integration outlook
 
@@ -258,7 +258,7 @@ uncertainty tolerance can inform sparse-to-dense approximation decisions
 alongside resource constraints.
 
 This project takes a different approach: extract Q_tv and compile it to
-TSU hardware via (ρ, n) separation, keeping Q_logic on CPU/GPU. This
+TSU hardware via (s, n) separation, keeping Q_logic on CPU/GPU. This
 trades RAPTL's joint optimization for hardware-native sampling — 5 PLN
 rules validate that Q_tv executes faithfully this way.
 
@@ -283,7 +283,7 @@ loss of RAPTL's joint optimization is an open question.
 pln_thrml/                 Main package
   __init__.py              Public API re-exports (pln_utils + unified + qln_cpu)
   pln_utils.py             PLN conversion utilities (c2w, w2c, stv_to_beta_params — no thrml dependency)
-  hybrid.py                (ρ, n) separation: binary Ising s + PLN formula c (MP/Deduction/Abduction/Inversion)
+  hybrid.py                (s, n) separation: binary Ising s + PLN formula c (MP / 3-spin-chain Deduction / Ded∘Inv Abduction / 2-node Inversion)
   compiler_binary.py       Binary Ising compiler (1 pbit/proposition, exact 2×2 encoding, joint 2-node graph)
   unified.py               Unified LBM(s) on TSU + QLN(n) on CPU: per-rule g(n) calibration
   qln_cpu.py               QLN n-layer: closed-form confidence propagation (Inversion, Revision)
@@ -291,9 +291,9 @@ pln_thrml/                 Main package
   dtv_baseline.py          DTV continuous Monte Carlo baseline (zero discretization error)
 vendor/PLN/                trueagi-io/PLN (git submodule) — test baselines
 tests/
-  conftest.py              Shared tolerance constants (strength ±0.05, confidence ±0.15)
+  conftest.py              Shared strength tolerance (±0.05 at K=16); confidence is closed-form (≤1e-3)
   test_unified.py          Unified architecture validation (DTV / PLN / Unified / Inversion / Revision)
-  test_hybrid.py           (ρ, n) separation validation (DTV / PLN / Binary / Hybrid)
+  test_hybrid.py           (s, n) separation validation (DTV / PLN / Binary / Hybrid)
 ```
 
 ## Contributing

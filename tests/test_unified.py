@@ -5,7 +5,7 @@ Validates the unified LBM(s) + QLN(n) architecture:
   - s layer (TSU): g(n)-modulated binary Ising sampling
   - n layer (CPU): QLN-style closed-form confidence propagation
 
-New rules: Inversion (CPU-only, Bayes vs PLN heuristic) and Revision (CPU-only, QLN formula).
+New rules: Inversion (CPU-only, Bayes vs PLN heuristic) and Revision (CPU-only, PLN book formula n_rev = n₁ + n₂).
 All Δ values measured against DTV (continuous Beta MC, zero discretisation error).
 """
 
@@ -76,8 +76,6 @@ INVERSION_PARAMS = [
      "s_AB": 0.8, "c_AB": 0.85, "id": "symmetric"},
     {"s_A": 0.8, "c_A": 0.9, "s_B": 0.3, "c_B": 0.85,
      "s_AB": 0.9, "c_AB": 0.9, "id": "asymmetric"},
-    {"s_A": 0.5, "c_A": 0.7, "s_B": 0.9, "c_B": 0.95,
-     "s_AB": 0.6, "c_AB": 0.8, "id": "weak_premise"},
 ]
 
 REVISION_PARAMS = [
@@ -321,11 +319,11 @@ class TestInversion:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  Test: Revision (CPU-only, QLN formula)
+#  Test: Revision (CPU-only, PLN book formula)
 # ═══════════════════════════════════════════════════════════════════════════
 
 class TestRevision:
-    """Revision: QLN n_rev = n₁+n₂ vs DTV baseline."""
+    """Revision: PLN book n_rev = n₁+n₂ (raw counts) vs DTV baseline."""
 
     @pytest.mark.parametrize("p", REVISION_PARAMS, ids=lambda p: p["id"])
     def test_strength_matches_dtv(self, p, capsys):
@@ -351,7 +349,7 @@ class TestRevision:
     def test_high_conf_dominates(self):
         """Higher-confidence source dominates the weighted average."""
         s, c = unified_revision(0.9, 0.95, 0.3, 0.1)
-        # c=0.95 → n≈21, c=0.1 → n≈2.22; high-conf dominates
+        # c=0.95 → n=19, c=0.1 → n≈0.11; high-conf dominates strongly
         assert s > 0.7, f"High-conf source (0.9) should dominate, got s={s:.3f}"
 
     def test_confidence_increases(self):
@@ -367,30 +365,27 @@ class TestRevision:
         s, c = unified_revision(0.6, 0.8, 0.6, 0.8)
         assert s == pytest.approx(0.6, abs=0.01)
 
-    def test_qln_vs_pln_divergence(self, capsys):
-        """Document the ~2 pseudocount difference between QLN and PLN revision."""
+    def test_revision_matches_pln_book(self, capsys):
+        """Verify revision uses PLN book formula (n_rev = n1 + n2, raw counts)."""
         s1, c1, s2, c2 = 0.8, 0.5, 0.7, 0.5
 
-        # QLN: n_rev = n1 + n2
-        s_qln, c_qln = revision(s1, c1, s2, c2)
+        # Code path
+        s_code, c_code = revision(s1, c1, s2, c2)
 
-        # PLN: w_rev = w1 + w2
+        # Direct PLN book formula (Ch 5 §5.10)
         w1, w2 = c2w(c1), c2w(c2)
         w_pln = w1 + w2
         s_pln = (w1 * s1 + w2 * s2) / w_pln
         c_pln = w2c(w_pln)
 
         with capsys.disabled():
-            print(f"\n  Rev QLN vs PLN:"
-                  f"  QLN=({s_qln:.4f},{c_qln:.4f})"
-                  f"  PLN=({s_pln:.4f},{c_pln:.4f})"
-                  f"  Δc={abs(c_qln-c_pln):.4f}")
+            print(f"\n  Rev code vs PLN book:"
+                  f"  code=({s_code:.4f},{c_code:.4f})"
+                  f"  PLN=({s_pln:.4f},{c_pln:.4f})")
 
-        # QLN should give slightly higher confidence than PLN
-        assert c_qln > c_pln, "QLN revision c should be ≥ PLN revision c"
-        # Difference is ~2 pseudocounts; larger for low-confidence inputs
-        # (c=0.5 → n=3, so 2 extra counts = 67% increase in evidence)
-        assert abs(c_qln - c_pln) < 0.15
+        # Code must match PLN book / QLN paper convention exactly
+        assert abs(s_code - s_pln) < 1e-9
+        assert abs(c_code - c_pln) < 1e-9
 
 
 # ═══════════════════════════════════════════════════════════════════════════

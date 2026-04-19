@@ -2,7 +2,7 @@
 pln_thrml.unified — LBM(s) on TSU + QLN(n) on CPU
 ====================================================
 
-Pure (ρ, n) separation orchestrator:
+Pure (s, n) separation orchestrator:
   - **s layer (TSU)**: Binary Ising sampling with g=1 (no precision modulation)
   - **n layer (CPU)**: QLN-style closed-form confidence propagation
 
@@ -111,7 +111,7 @@ def unified_deduction(s_A, c_A, s_B, c_B, s_C, c_C,
     TSU: single 3-node chain A→B→C, clamp A, simultaneously sample B+C.
     CPU: c_AC = s_AB × s_BC × c_AB × c_BC.
 
-    The dominant error is the Jensen gap from (ρ,n) separation: binary
+    The dominant error is the Jensen gap from (s,n) separation: binary
     Ising encodes E[s] but the conditional is nonlinear in s, so
     f(E[s]) ≠ E[f(s)].  This is the true cost of mean-field separation.
 
@@ -351,11 +351,11 @@ def unified_inversion(s_A, c_A, s_B, c_B, s_AB, c_AB, method="bayes",
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  Revision (CPU-only, QLN formula)
+#  Revision (CPU-only, PLN book formula)
 # ═══════════════════════════════════════════════════════════════════════════
 
 def unified_revision(s1, c1, s2, c2):
-    """Unified Revision: CPU-only, QLN formula n_rev = n₁ + n₂.
+    """Unified Revision: CPU-only, PLN book formula n_rev = n₁ + n₂ (raw counts).
 
     Returns
     -------

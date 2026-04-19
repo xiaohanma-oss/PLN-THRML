@@ -22,8 +22,8 @@ pytest -m slow -v                # scalability tests only (long chains, upstream
 
 - **Docstrings**: all public functions should have a docstring with at least
   a one-line summary and a `Parameters` section for non-trivial signatures.
-- **Test tolerances**: strength ±0.05, confidence ±0.15 at K=16
-  (see `tests/conftest.py` for K-dependent tolerances).
+- **Test tolerances**: strength ±0.05 at K=16 (see `tests/conftest.py` for
+  K-dependent tolerances); confidence is closed-form on CPU so tests use ≤1e-3.
 - **README sync**: if your change modifies the module structure, public API,
   or test file names, update `README.md` to match.
 - **No MeTTa invention**: MeTTa code must follow upstream

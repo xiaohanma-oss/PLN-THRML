@@ -2,15 +2,16 @@
 pln_thrml.qln_cpu — QLN n-layer: closed-form confidence propagation on CPU
 ===========================================================================
 
-Implements the n-layer of the unified (ρ, n) separation architecture:
-  - **ρ (strength s)** sampled on TSU via binary Ising / LBM
+Implements the n-layer of the unified (s, n) separation architecture:
+  - **s (strength)** sampled on TSU via binary Ising / LBM
   - **n (evidence count)** propagated on CPU via deterministic algebra (this module)
 
 Each function computes output confidence from input confidences using PLN
 closed-form formulas.  Inversion and Revision are CPU-only (no TSU component).
 
-Revision uses QLN formula (n_rev = n₁ + n₂) per Definition 3.9 of the QLN
-paper, which differs from upstream PLN (w_rev = w₁ + w₂) by ~2 pseudocounts.
+Revision uses the PLN book formula (n_rev = n₁ + n₂) per Ch 5 §5.10,
+which coincides with QLN paper Definition 3.9 (Goertzel 2026) in the
+classical limit. Both conventions treat n as a raw evidence count.
 """
 
 from pln_thrml.pln_utils import c2w, w2c, EPS
@@ -100,21 +101,19 @@ def inversion_bayes(s_A, c_A, s_B, c_B, s_AB, c_AB):
 
 
 # ═════════════��═════════════════════════════════════════���═══════════════════
-#  Revision (CPU-only, QLN formula)
+#  Revision (CPU-only, PLN book formula)
 # ═════���════════════════════════════��════════════════════════════════════════
 
 def revision(s1, c1, s2, c2):
-    """QLN Revision: merge two independent evidence sources.
+    """PLN/QLN Revision: merge two independent evidence sources.
 
-    Uses QLN Definition 3.9:
-        n_rev = n₁ + n₂
-        s_rev = (n₁ × s₁ + n₂ × s₂) / n_rev
-        c_rev = w2c(n_rev - 2)
+    Uses PLN book Ch 5 §5.10 (= QLN paper Definition 3.9, Goertzel 2026):
+        n_rev = n₁ + n₂                       (raw evidence counts, c2w(c))
+        s_rev = (n₁·s₁ + n₂·s₂) / n_rev
+        c_rev = n_rev / (n_rev + 1)           (k=1)
 
-    This differs from upstream PLN (w_rev = w₁ + w₂) by ~2 pseudocounts
-    because QLN's n includes the Beta(1,1) baseline per source.
-    The choice is intentional: in the (ρ, n) architecture, n is a first-class
-    citizen and n₁ + n₂ is the natural merge operation.
+    Both PLN and QLN treat n as the raw observation count. When
+    n₁ = n₂ = 0 (both c = 0), fall back to unweighted average, c_rev = 0.
 
     Returns
     -------
@@ -124,13 +123,15 @@ def revision(s1, c1, s2, c2):
     c1_f = min(float(c1), 0.9999)
     c2_f = min(float(c2), 0.9999)
 
-    n1 = c2w(c1_f) + 2.0
-    n2 = c2w(c2_f) + 2.0
-
+    n1 = c2w(c1_f)
+    n2 = c2w(c2_f)
     n_rev = n1 + n2
-    s_rev = (n1 * s1_f + n2 * s2_f) / n_rev
 
-    w_rev = max(n_rev - 2.0, 0.0)
-    c_rev = w2c(w_rev)
+    if n_rev < EPS:
+        s_rev = 0.5 * (s1_f + s2_f)
+        c_rev = 0.0
+    else:
+        s_rev = (n1 * s1_f + n2 * s2_f) / n_rev
+        c_rev = w2c(n_rev)
 
     return float(s_rev), float(c_rev)

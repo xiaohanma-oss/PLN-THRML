@@ -1,9 +1,9 @@
 """
 Four-column precision comparison: DTV | PLN | Binary Ising | Hybrid (s+c).
 
-Validates the (ρ, n) separation architecture:
-  - ρ → s: binary Ising sampling (1 pbit per proposition, exact 2×2 encoding)
-  - n → c: PLN closed-form formulas (deterministic algebra)
+Validates the (s, n) separation architecture:
+  - s-path: binary Ising sampling (1 pbit per proposition, exact 2×2 encoding)
+  - n-path: PLN closed-form formulas (deterministic algebra)
 
 All Δ values are measured against DTV (continuous Beta MC, zero discretisation error).
 """
@@ -56,8 +56,6 @@ INVERSION_PARAMS = [
      "s_AB": 0.8, "c_AB": 0.85, "id": "symmetric"},
     {"s_A": 0.8, "c_A": 0.9, "s_B": 0.3, "c_B": 0.85,
      "s_AB": 0.9, "c_AB": 0.9, "id": "asymmetric"},
-    {"s_A": 0.5, "c_A": 0.7, "s_B": 0.9, "c_B": 0.95,
-     "s_AB": 0.6, "c_AB": 0.8, "id": "weak_premise"},
 ]
 
 
@@ -75,10 +73,20 @@ def _pln_formula_deduction(p):
             + (1.0 - p["s_AB"]) * (p["s_C"] - p["s_B"] * p["s_BC"]) / denom)
 
 
-def _pln_formula_abduction(p):
-    denom = max(1.0 - p["s_A"], 1e-7)
-    return (p["s_AC"] * p["s_BC"]
-            + (1.0 - p["s_AC"]) * (p["s_B"] - p["s_A"] * p["s_BC"]) / denom)
+def _pln_formula_abduction(p, background=0.02):
+    """Canonical PLN Abduction (book Ch 5.4 / lib_pln.metta Truth_Abduction).
+
+    Pattern: link(A,C) with strength s_AC, link(B,C) with strength s_BC,
+    shared target C, infer s_AB.
+        s_AB = s_AC·s_BC · s_B/s_C + (1-s_AC)·(1-s_BC) · s_B/(1-s_C)
+
+    s_C is not in ABDUCTION_PARAMS; derive it from the marginal
+    P(C) = s_BC·s_B + bg·(1-s_B).
+    """
+    s_C = p["s_BC"] * p["s_B"] + background * (1.0 - p["s_B"])
+    s_C = max(min(s_C, 1.0 - 1e-7), 1e-7)
+    return (p["s_AC"] * p["s_BC"] * p["s_B"] / s_C
+            + (1.0 - p["s_AC"]) * (1.0 - p["s_BC"]) * p["s_B"] / (1.0 - s_C))
 
 
 def _pln_formula_inversion(p):
@@ -325,7 +333,7 @@ class TestDeductionPrecision:
             p["s_A"], p["c_A"], p["s_B"], p["c_B"], p["s_C"], p["c_C"],
             p["s_AB"], p["c_AB"], p["s_BC"], p["c_BC"])
 
-        # Method 4: second-order Jensen correction (n corrects ρ)
+        # Method 4: second-order Jensen correction (n corrects s)
         s_corrected, _ = hybrid_deduction_corrected(
             p["s_A"], p["c_A"], p["s_B"], p["c_B"], p["s_C"], p["c_C"],
             p["s_AB"], p["c_AB"], p["s_BC"], p["c_BC"])

@@ -200,33 +200,48 @@ def dtv_inversion(s_A, c_A, s_B, c_B, s_AB, c_AB,
 
 
 def dtv_revision(s1, c1, s2, c2, n_samples=200_000, seed=42):
-    """DTV ground truth for Revision: merge two Beta evidence sources.
+    """DTV ground truth for Revision: Bayesian combination of evidence streams.
 
-    Samples from 2 Beta distributions and computes the evidence-weighted
-    combination (QLN formula: n_rev = n₁ + n₂).
+    Unlike MP/Deduction/Abduction/Inversion — which propagate uncertainty
+    through a nonlinear formula and need MC to capture Jensen gap — Revision
+    is a pure Bayesian merge of two independent evidence streams for the
+    *same* proposition. Under the PLN book zero-prior convention
+    (Ch 4 §4.2, c = n/(n+1) ↔ Beta(s·w, (1-s)·w)), the joint posterior is
+    also a Beta:
 
-    The DTV approach: sample from both posteriors, combine with weights
-    proportional to their evidence counts, moment-match the result.
+        Beta(s₁·w₁ + s₂·w₂,  (1-s₁)·w₁ + (1-s₂)·w₂)
+
+    with α+β = w₁+w₂, matching PLN book Ch 5 §5.10 analytical formula.
+    We sample from this posterior and moment-match without the +2 pseudo-count
+    offset that other DTV baselines use (zero-prior Beta's α+β is already
+    the raw count).
 
     Returns (strength, confidence) estimated from output distribution.
     """
     from pln_thrml.pln_utils import c2w
 
+    s1_f, s2_f = float(s1), float(s2)
+    w1 = c2w(min(float(c1), 0.9999))
+    w2 = c2w(min(float(c2), 0.9999))
+    w_rev = w1 + w2
+
+    if w_rev < EPS:
+        return 0.5 * (s1_f + s2_f), 0.0
+
+    alpha = s1_f * w1 + s2_f * w2
+    beta = (1.0 - s1_f) * w1 + (1.0 - s2_f) * w2
+
+    if alpha < EPS or beta < EPS:
+        return float(alpha / w_rev), float(w2c(w_rev))
+
     rng = np.random.default_rng(seed)
+    samples = beta_dist.rvs(alpha, beta, size=n_samples, random_state=rng)
+    samples = np.clip(samples, EPS, 1.0 - EPS)
 
-    alpha1, beta1 = stv_to_beta_params(s1, c1)
-    alpha2, beta2 = stv_to_beta_params(s2, c2)
-
-    x1 = beta_dist.rvs(alpha1, beta1, size=n_samples, random_state=rng)
-    x2 = beta_dist.rvs(alpha2, beta2, size=n_samples, random_state=rng)
-
-    # QLN revision: weighted average with n-weights
-    n1 = c2w(min(float(c1), 0.9999)) + 2.0
-    n2 = c2w(min(float(c2), 0.9999)) + 2.0
-    w1 = n1 / (n1 + n2)
-    w2 = n2 / (n1 + n2)
-
-    combined = w1 * x1 + w2 * x2
-    combined = np.clip(combined, EPS, 1.0 - EPS)
-
-    return _fit_stv_from_samples(combined)
+    # Zero-prior moment-match: α+β = w_rev directly, no -2 offset
+    mu = samples.mean()
+    var = samples.var()
+    if var < 1e-12:
+        return float(mu), 0.9999
+    n_eff = max(mu * (1.0 - mu) / var - 1.0, 0.0)
+    return float(mu), float(w2c(n_eff))
