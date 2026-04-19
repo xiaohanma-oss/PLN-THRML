@@ -2,7 +2,7 @@
 pln_thrml.unified — LBM(s) on TSU + QLN(n) on CPU
 ====================================================
 
-Pure (s, n) separation orchestrator:
+Unified orchestrator: strength on TSU, evidence count on CPU.
   - **s layer (TSU)**: Binary Ising sampling with g=1 (no precision modulation)
   - **n layer (CPU)**: QLN-style closed-form confidence propagation
 
@@ -111,9 +111,9 @@ def unified_deduction(s_A, c_A, s_B, c_B, s_C, c_C,
     TSU: single 3-node chain A→B→C, clamp A, simultaneously sample B+C.
     CPU: c_AC = s_AB × s_BC × c_AB × c_BC.
 
-    The dominant error is the Jensen gap from (s,n) separation: binary
-    Ising encodes E[s] but the conditional is nonlinear in s, so
-    f(E[s]) ≠ E[f(s)].  This is the true cost of mean-field separation.
+    The dominant error is a Jensen gap: binary Ising encodes E[s] but
+    the conditional is nonlinear in s, so f(E[s]) ≠ E[f(s)]. This is
+    the true cost of mean-field separation between s and n.
 
     Returns (s_AC, c_AC, meta).
     """

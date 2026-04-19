@@ -1,5 +1,5 @@
 """
-pln_thrml.compiler_binary — Binary Ising compiler for (s, n) separation
+pln_thrml.compiler_binary — Binary Ising compiler for the strength path
 =========================================================================
 
 Compiles PLN factor graphs to 1-pbit-per-proposition Ising representations.

@@ -1,7 +1,7 @@
 """
 Four-column precision comparison: DTV | PLN | Binary Ising | Hybrid (s+c).
 
-Validates the (s, n) separation architecture:
+Validates the two-path compilation:
   - s-path: binary Ising sampling (1 pbit per proposition, exact 2×2 encoding)
   - n-path: PLN closed-form formulas (deterministic algebra)
 

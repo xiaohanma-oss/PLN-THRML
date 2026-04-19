@@ -25,11 +25,11 @@
 ## Overview
 
 PLN-THRML compiles probabilistic logic inference rules into factor graphs
-that run on thermodynamic hardware. The **(s, n) separation architecture**
-splits each inference into two independent paths: **strength (s)** via
-Ising Gibbs sampling on TSU, **confidence (c)** via closed-form algebra
-on CPU. 5 PLN rules (MP, Deduction, Abduction, Inversion, Revision) are
-implemented and verified end-to-end with 88 tests.
+that run on thermodynamic hardware. Each inference splits into two
+independent paths: **strength (s)** via Ising Gibbs sampling on TSU,
+**confidence (c)** via closed-form algebra on CPU. 5 PLN rules (MP,
+Deduction, Abduction, Inversion, Revision) are implemented and verified
+end-to-end with 88 tests.
 
 <details>
 <summary><strong>New to PLN? (30-second primer)</strong></summary>
@@ -73,9 +73,9 @@ In thrml (two levels):
 | `CategoricalEBMFactor` (unary)  | Weight vector encoding a prior over K bins                         |
 | `SquareCategoricalEBMFactor` (pairwise) | K×K weight table encoding a conditional relationship between two nodes |
 
-The separation architecture's main path uses `SpinNode` (1 pbit = 1
-proposition, exact 2×2 encoding). K-bin `CategoricalNode` is used for
-baseline comparison and rules (like abduction) that need higher resolution.
+The main path uses `SpinNode` (1 pbit = 1 proposition, exact 2×2
+encoding). K-bin `CategoricalNode` is used for baseline comparison and
+rules (like abduction) that need higher resolution.
 
 **Gibbs sampling** iteratively resamples each variable conditioned on its
 neighbors until the joint distribution converges. The Boltzmann connection
@@ -144,7 +144,7 @@ pip install -e ".[dev]"                   # + pytest for running tests
 
 ## Quick start
 
-### Unified API (separation architecture)
+### Unified API
 
 ```python
 from pln_thrml import unified_modus_ponens
@@ -155,7 +155,7 @@ print(f"P(B) = (stv {s:.3f} {c:.3f})")   # ≈ (stv 0.777 0.765)
 # s from Ising Gibbs sampling, c from PLN closed-form formula
 ```
 
-### Hybrid API (separation architecture, lightweight)
+### Hybrid API (lightweight)
 
 ```python
 from pln_thrml.hybrid import hybrid_modus_ponens
@@ -175,7 +175,7 @@ python -m pytest tests/test_hybrid.py -v
 
 ## How it works
 
-### (s, n) separation — the main path
+### The two paths: strength on TSU, confidence on CPU
 
 1. **Compile s** — PLN's 2×2 conditional table `[1−ε, ε; 1−s_AB, s_AB]` (rows = parent F/T, cols = child F/T, ε = background rate ≈ 0.02 = P(child=T | parent=F)) maps exactly to Ising parameters: bias _h_ encodes the prior, coupling _J_ encodes the implication strength. 1 `SpinNode` per proposition.
 2. **Sample s (TSU)** — Block Gibbs sampling over Ising spins. Binary encoding means zero discretisation error for strength.
@@ -184,7 +184,7 @@ python -m pytest tests/test_hybrid.py -v
 
 ### PLN → thrml mapping
 
-| PLN concept                       | Separation path                              | Hardware          |
+| PLN concept                       | Hardware path                                | Device            |
 | --------------------------------- | -------------------------------------------- | ----------------- |
 | Proposition                       | `SpinNode` (binary ±1)                       | pbit              |
 | Prior P(A)                        | Ising bias _h_                               | Bias field        |
@@ -258,7 +258,8 @@ uncertainty tolerance can inform sparse-to-dense approximation decisions
 alongside resource constraints.
 
 This project takes a different approach: extract Q_tv and compile it to
-TSU hardware via (s, n) separation, keeping Q_logic on CPU/GPU. This
+TSU hardware by splitting strength (TSU Ising sampling) from confidence
+(CPU closed-form), keeping Q_logic on CPU/GPU. This
 trades RAPTL's joint optimization for hardware-native sampling — 5 PLN
 rules validate that Q_tv executes faithfully this way.
 
@@ -283,7 +284,7 @@ loss of RAPTL's joint optimization is an open question.
 pln_thrml/                 Main package
   __init__.py              Public API re-exports (pln_utils + unified + qln_cpu)
   pln_utils.py             PLN conversion utilities (c2w, w2c, stv_to_beta_params — no thrml dependency)
-  hybrid.py                (s, n) separation: binary Ising s + PLN formula c (MP / 3-spin-chain Deduction / Ded∘Inv Abduction / 2-node Inversion)
+  hybrid.py                Binary Ising s + PLN formula c (MP / 3-spin-chain Deduction / Ded∘Inv Abduction / 2-node Inversion)
   compiler_binary.py       Binary Ising compiler (1 pbit/proposition, exact 2×2 encoding, joint 2-node graph)
   unified.py               Unified LBM(s) on TSU + QLN(n) on CPU: per-rule g(n) calibration
   qln_cpu.py               QLN n-layer: closed-form confidence propagation (Inversion, Revision)
@@ -293,7 +294,7 @@ vendor/PLN/                trueagi-io/PLN (git submodule) — test baselines
 tests/
   conftest.py              Shared strength tolerance (±0.05 at K=16); confidence is closed-form (≤1e-3)
   test_unified.py          Unified architecture validation (DTV / PLN / Unified / Inversion / Revision)
-  test_hybrid.py           (s, n) separation validation (DTV / PLN / Binary / Hybrid)
+  test_hybrid.py           Binary-Ising-s + PLN-formula-c validation (DTV / PLN / Binary / Hybrid)
 ```
 
 ## Contributing

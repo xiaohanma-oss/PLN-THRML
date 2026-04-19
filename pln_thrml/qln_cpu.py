@@ -2,7 +2,7 @@
 pln_thrml.qln_cpu — QLN n-layer: closed-form confidence propagation on CPU
 ===========================================================================
 
-Implements the n-layer of the unified (s, n) separation architecture:
+Implements the CPU-side n-path:
   - **s (strength)** sampled on TSU via binary Ising / LBM
   - **n (evidence count)** propagated on CPU via deterministic algebra (this module)
 

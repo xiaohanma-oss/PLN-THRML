@@ -1,5 +1,5 @@
 """
-pln_thrml.hybrid — (s, n) separation: binary Ising s + PLN formula c
+pln_thrml.hybrid — binary Ising s + PLN formula c
 =====================================================================
 
 Orchestrates the hybrid PLN architecture:
@@ -86,8 +86,8 @@ def _jensen_correction_deduction(s_B, c_B, s_C, s_BC):
     and   Var(s_B) = s_B(1-s_B) / (n_B+1).
 
     This uses n_B (from c_B) to correct s — the mechanism by which
-    confidence count n influences the strength computation in the
-    (s, n) separation architecture.  Partially answers QLN Open Problem #4.
+    confidence count n feeds back into the strength computation.
+    Partially answers QLN Open Problem #4.
     """
     s_B = float(s_B)
     denom = max(1.0 - s_B, EPS)
@@ -105,9 +105,9 @@ def _laplace_deduction(s_A, c_A, s_B, c_B, s_C, c_C,
     The deduction formula f is Taylor-expanded to second order at the
     operating point (mean field).  Output mean and variance give (s, c).
 
-    This implements the Active Inference Laplace approximation for the
-    (s, n) separation architecture: n information is injected into s
-    via variance, and output n is derived from output variance.
+    This is the Active Inference Laplace approximation: n information
+    is injected into s via variance, and output n is derived from output
+    variance.
     """
     s_A, s_B, s_C = float(s_A), float(s_B), float(s_C)
     s_AB, s_BC = float(s_AB), float(s_BC)
