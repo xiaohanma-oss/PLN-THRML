@@ -63,19 +63,17 @@ A **factor graph** is a bipartite graph of variable nodes and factor nodes.
 Each variable holds a discrete distribution; each factor encodes how likely
 certain state combinations are via a weight table.
 
-In thrml (two levels):
+In thrml, two primitives cover everything PLN-THRML needs:
 
 | thrml construct                  | What it does                                                       |
 | -------------------------------- | ------------------------------------------------------------------ |
 | `SpinNode`                       | Binary (±1) variable — 1 pbit per proposition                     |
 | `SpinEBMFactor`                  | Ising bias (_h_) + coupling (_J_) between spins                   |
-| `CategoricalNode(K)`            | K-state discrete variable (K-bin Beta prior)                       |
-| `CategoricalEBMFactor` (unary)  | Weight vector encoding a prior over K bins                         |
-| `SquareCategoricalEBMFactor` (pairwise) | K×K weight table encoding a conditional relationship between two nodes |
 
-The main path uses `SpinNode` (1 pbit = 1 proposition, exact 2×2
-encoding). K-bin `CategoricalNode` is used for baseline comparison and
-rules (like abduction) that need higher resolution.
+Every proposition is one `SpinNode` — 1 pbit, exact 2×2 encoding, zero
+discretisation error for strength. Rules differ only in how the spins
+connect: a chain of `SpinEBMFactor`s for deduction, a joint 2-node graph
+for inversion, a hidden-unit topology for abduction's explaining-away.
 
 **Gibbs sampling** iteratively resamples each variable conditioned on its
 neighbors until the joint distribution converges. The Boltzmann connection
@@ -88,9 +86,8 @@ log-probabilities become energy weights directly.
 exactly as Ising parameters (bias _h_, coupling _J_) — 1 pbit per
 proposition, zero discretisation error for strength. Confidence
 propagates via closed-form PLN/QLN algebra on CPU, running in parallel
-with the TSU sampler. For rules needing higher resolution (abduction),
-a K-bin Beta fallback path provides full distributional inference.
-5 rules × multiple parameter sets × 88 tests constitute the evidence.
+with the TSU sampler. 5 rules × multiple parameter sets × 88 tests
+constitute the evidence.
 Rule selection and structure discovery remain on CPU/GPU.
 
 ## Why this matters
@@ -292,7 +289,7 @@ pln_thrml/                 Main package
   dtv_baseline.py          DTV continuous Monte Carlo baseline (zero discretization error)
 vendor/PLN/                trueagi-io/PLN (git submodule) — test baselines
 tests/
-  conftest.py              Shared strength tolerance (±0.05 at K=16); confidence is closed-form (≤1e-3)
+  conftest.py              Shared strength tolerance (±0.05); confidence is closed-form (≤1e-3)
   test_unified.py          Unified architecture validation (DTV / PLN / Unified / Inversion / Revision)
   test_hybrid.py           Binary-Ising-s + PLN-formula-c validation (DTV / PLN / Binary / Hybrid)
 ```
