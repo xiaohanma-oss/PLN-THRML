@@ -13,3 +13,7 @@ build/
 htmlcov/
 venv/
 docs/
+*.log
+.DS_Store
+.history/
+memory/
