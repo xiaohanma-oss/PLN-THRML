@@ -1,0 +1,31 @@
+cff-version: 1.2.0
+title: PLN-THRML
+message: >-
+  If you use this software, please cite both the software (this file)
+  and the AGI-26 paper (see preferred-citation below).
+type: software
+authors:
+  - family-names: Ma
+    given-names: Xiaohan
+    email: max257548@gmail.com
+version: 0.2.0
+date-released: 2026-05-31
+license: MIT
+repository-code: https://github.com/xiaohanma-oss/PLN-THRML
+keywords:
+  - probabilistic logic networks
+  - thermodynamic computing
+  - Boltzmann machine
+  - factor graph
+  - Ising model
+preferred-citation:
+  type: conference-paper
+  title: Compiling PLN to Thermodynamic Hardware
+  authors:
+    - family-names: Ma
+      given-names: Xiaohan
+  collection-title: Proceedings of AGI-26
+  collection-type: proceedings
+  publisher:
+    name: Springer
+  year: 2026

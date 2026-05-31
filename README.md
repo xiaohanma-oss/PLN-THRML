@@ -29,7 +29,7 @@ that run on thermodynamic hardware. Each inference splits into two
 independent paths: **strength (s)** via Ising Gibbs sampling on TSU,
 **confidence (c)** via closed-form algebra on CPU. 5 PLN rules (MP,
 Deduction, Abduction, Inversion, Revision) are implemented and verified
-end-to-end with 88 tests.
+end-to-end with 66 tests.
 
 <details>
 <summary><strong>New to PLN? (30-second primer)</strong></summary>
@@ -86,7 +86,7 @@ log-probabilities become energy weights directly.
 exactly as Ising parameters (bias _h_, coupling _J_) — 1 pbit per
 proposition, zero discretisation error for strength. Confidence
 propagates via closed-form PLN/QLN algebra on CPU, running in parallel
-with the TSU sampler. 5 rules × multiple parameter sets × 88 tests
+with the TSU sampler. 5 rules × multiple parameter sets × 66 tests
 constitute the evidence.
 Rule selection and structure discovery remain on CPU/GPU.
 
@@ -230,7 +230,7 @@ All return `(strength, confidence)`.
 
 ## Results
 
-5 PLN rules verified across three architecture levels (88 tests total).
+5 PLN rules verified across three architecture levels (66 tests total).
 Representative strength errors (Δ vs DTV continuous baseline):
 
 | Rule         | Unified (Ising+QLN) | Hybrid (Binary+PLN) |
@@ -311,6 +311,28 @@ Five projects compiling Hyperon's cognitive architecture to thermodynamic hardwa
 | [QuantiMORK-THRML](https://github.com/xiaohanma-oss/QuantiMORK-THRML) | Predictive coding → wavelet-sparse factor graphs |
 | [Geodesic-THRML](https://github.com/xiaohanma-oss/Geodesic-THRML) | Unified geodesic scheduler for all above |
 
+## Citing this work
+
+If you use PLN-THRML in academic work, please cite our AGI-26 paper:
+
+```bibtex
+@inproceedings{ma2026pln,
+  author    = {Ma, Xiaohan},
+  title     = {Compiling {PLN} to Thermodynamic Hardware},
+  booktitle = {Proceedings of AGI-26},
+  series    = {Lecture Notes in Artificial Intelligence},
+  publisher = {Springer},
+  year      = {2026}
+}
+```
+
+To reproduce Table 2 of the paper, check out tag `v0.2.0-agi26`:
+
+```bash
+git checkout v0.2.0-agi26
+python scripts/reproduce_paper_tables.py
+```
+
 ## Acknowledgements
 
 - [Hyperon/PLN](https://github.com/trueagi-io/PLN) — TrueAGI
@@ -318,4 +340,4 @@ Five projects compiling Hyperon's cognitive architecture to thermodynamic hardwa
 
 ## License
 
-[MIT](LICENSE) — Copyright (c) 2026 Xiaohan Ma
+[MIT](LICENSE) — Copyright (c) 2025-2026 Xiaohan Ma
