@@ -14,14 +14,12 @@ Currently covers: Modus Ponens, Deduction, Abduction, Inversion.
 
 from pln_thrml.compiler_binary import (
     compile_binary_chain,
-    compile_binary_inv_v,
     compile_binary_chain_with_hidden,
     compile_binary_joint_2node,
     compile_joint_categorical,
     run_binary_sampling,
     run_joint_sampling,
     estimate_binary_marginal,
-    estimate_joint_marginal,
     estimate_joint_conditional,
     _binary_conditional,
     DEFAULT_BINARY_N_BATCHES,
@@ -31,17 +29,19 @@ from pln_thrml.qln_cpu import inversion_bayes
 
 
 __all__ = [
+    # ── Canonical PLN rules (the four hardware-bound rules referenced in
+    #    paper-a Table 2) ──────────────────────────────────────────────────
     "hybrid_modus_ponens",
-    "hybrid_deduction",
+    "hybrid_deduction",        # canonical deduction
+    "hybrid_abduction",
+    "hybrid_inversion",
+    # ── Experimental deduction alternatives (research-only, not used in
+    #    paper). Kept for cross-validation against the canonical form. ────
     "hybrid_deduction_corrected",
-    "hybrid_deduction_laplace",
     "hybrid_deduction_tempered",
     "hybrid_deduction_pmode",
     "hybrid_deduction_joint",
-    "hybrid_deduction_pbit_joint",
     "hybrid_deduction_hidden",
-    "hybrid_abduction",
-    "hybrid_inversion",
 ]
 
 
@@ -94,91 +94,6 @@ def _jensen_correction_deduction(s_B, c_B, s_C, s_BC):
     h_pp = 2.0 * (float(s_C) - float(s_BC)) / (denom ** 3)
     var_B = _var_from_stv(s_B, c_B)
     return 0.5 * h_pp * var_B
-
-
-def _laplace_deduction(s_A, c_A, s_B, c_B, s_C, c_C,
-                       s_AB, c_AB, s_BC, c_BC, background=DEFAULT_EPSILON):
-    """Laplace-approximated deduction: reconstruct Gaussians from (s, n),
-    propagate analytically, extract output (s, c).
-
-    Each input (s_i, c_i) → N(μ=s_i, σ²=s_i(1-s_i)/(n_i+1)).
-    The deduction formula f is Taylor-expanded to second order at the
-    operating point (mean field).  Output mean and variance give (s, c).
-
-    This is the Active Inference Laplace approximation: n information
-    is injected into s via variance, and output n is derived from output
-    variance.
-    """
-    s_A, s_B, s_C = float(s_A), float(s_B), float(s_C)
-    s_AB, s_BC = float(s_AB), float(s_BC)
-
-    # Reconstruct Gaussians: σ² from (s, c) for each input
-    var_A = _var_from_stv(s_A, c_A)
-    var_B = _var_from_stv(s_B, c_B)
-    var_C = _var_from_stv(s_C, c_C)
-    var_AB = _var_from_stv(s_AB, c_AB)
-    var_BC = _var_from_stv(s_BC, c_BC)
-
-    # PLN deduction: f(s_AB, s_BC, s_B, s_C) = s_AB*s_BC + (1-s_AB)*h(s_B)
-    # where h(x) = (s_C - x*s_BC)/(1-x)
-    denom_B = max(1.0 - s_B, EPS)
-    h_val = (s_C - s_B * s_BC) / denom_B
-    f_mu = s_AB * s_BC + (1.0 - s_AB) * h_val  # mean field point estimate
-
-    # ── Second-order correction for s (E[f] ≈ f(μ) + ½ Σ f'' σ²) ──
-
-    # Partial second derivatives at operating point:
-    # ∂²f/∂s_B² : h''(s_B) = 2(s_C - s_BC)/(1-s_B)³, scaled by (1-s_AB)
-    h_pp = 2.0 * (s_C - s_BC) / (denom_B ** 3)
-    corr_B = 0.5 * (1.0 - s_AB) * h_pp * var_B
-
-    # ∂²f/∂s_AB² = 0 (f is linear in s_AB)
-    # ∂²f/∂s_BC² = 0 (f is linear in s_BC)
-    # ∂²f/∂s_C²  = 0 (f is linear in s_C)
-
-    # Cross term ∂²f/∂s_AB∂s_BC = 1 (from s_AB*s_BC term)
-    # But inputs are independent → cross variance = 0, no contribution
-    # Cross term ∂²f/∂s_AB∂h = -h(s_B), but this mixes with s_B correction
-
-    s_out = f_mu + corr_B
-
-    # ── Variance propagation for output n (Var[f] ≈ Σ (∂f/∂xᵢ)² σ²ᵢ) ──
-
-    # ∂f/∂s_AB = s_BC - h(s_B) = s_BC - (s_C - s_B*s_BC)/(1-s_B)
-    df_dAB = s_BC - h_val
-
-    # ∂f/∂s_BC = s_AB + (1-s_AB)*(-s_B)/(1-s_B)... wait, let me redo
-    # f = s_AB*s_BC + (1-s_AB)*(s_C - s_B*s_BC)/(1-s_B)
-    # ∂f/∂s_BC = s_AB + (1-s_AB)*(-s_B)/(1-s_B)
-    df_dBC = s_AB + (1.0 - s_AB) * (-s_B) / denom_B
-
-    # ∂f/∂s_B = (1-s_AB) * h'(s_B)
-    # h'(x) = [-s_BC(1-x) + (s_C - x*s_BC)] / (1-x)² = (s_C - s_BC)/(1-x)²
-    h_p = (s_C - s_BC) / (denom_B ** 2)
-    df_dB = (1.0 - s_AB) * h_p
-
-    # ∂f/∂s_C = (1-s_AB) / (1-s_B)
-    df_dC = (1.0 - s_AB) / denom_B
-
-    # ∂f/∂s_A = 0 (s_A not in the deduction formula for s_AC)
-
-    var_out = (df_dAB ** 2 * var_AB
-               + df_dBC ** 2 * var_BC
-               + df_dB ** 2 * var_B
-               + df_dC ** 2 * var_C)
-
-    # Convert output variance → output n → output c
-    s_out_safe = max(min(s_out, 1.0 - EPS), EPS)
-    if var_out > EPS:
-        n_out = s_out_safe * (1.0 - s_out_safe) / var_out - 1.0
-        n_out = max(n_out, 0.0)
-    else:
-        n_out = 1e4  # very high precision
-
-    from pln_thrml.pln_utils import w2c
-    c_out = w2c(max(n_out - 2.0, 0.0))
-
-    return s_out, c_out
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -310,26 +225,6 @@ def hybrid_deduction_corrected(s_A, c_A, s_B, c_B, s_C, c_C,
     c_AC = _c_deduction(s_AB, c_AB, s_BC, c_BC)
 
     return s_AC, c_AC
-
-
-def hybrid_deduction_laplace(s_A, c_A, s_B, c_B, s_C, c_C,
-                             s_AB, c_AB, s_BC, c_BC,
-                             background=DEFAULT_EPSILON,
-                             **kwargs):
-    """Hybrid Deduction via Laplace approximation.
-
-    Reconstructs Gaussian N(s, σ²) from each (s, c) input, then
-    analytically propagates mean and variance through the PLN
-    deduction formula using second-order Taylor expansion.
-
-    Output (s, c) are BOTH derived from the same Laplace framework:
-      - s from E[f(X)] ≈ f(μ) + ½ Σ f''_ii σ²_i
-      - c from Var[f(X)] ≈ Σ (∂f/∂x_i)² σ²_i → n → c
-
-    Pure CPU, O(1) scalar operations, no sampling.
-    """
-    return _laplace_deduction(s_A, c_A, s_B, c_B, s_C, c_C,
-                              s_AB, c_AB, s_BC, c_BC, background)
 
 
 def hybrid_abduction(s_A, c_A, s_B, c_B,
@@ -616,46 +511,6 @@ def hybrid_deduction_joint(s_A, c_A, s_B, c_B, s_C, c_C,
     # n-path: PLN formula
     c_AC = _c_deduction(s_AB, c_AB, s_BC, c_BC)
 
-    return s_C_inferred, c_AC
-
-
-def hybrid_deduction_pbit_joint(s_A, c_A, s_B, c_B, s_C, c_C,
-                                s_AB, c_AB, s_BC, c_BC,
-                                background=DEFAULT_EPSILON,
-                                seed=42, n_batches=None):
-    """Hybrid Deduction via single 3-spin pbit chain with parent-bias fix.
-
-    Encodes the full Markov-chain log joint P(A)·P(B|A)·P(C|B) into a
-    3-spin pairwise Ising energy using the complete expansion
-        ln P(a,b,c) = const + a·(λ_A + μ_AB) + b·(ν_AB + μ_BC) + c·ν_BC
-                              + ab·J_AB + bc·J_BC
-    where μ is the parent-bias contribution (missing from the default
-    compile path).  Gibbs-samples (B, C) jointly under stochastic A-clamp
-    and returns P(C=T | A=+1) by filtering batches on root_bits.
-
-    Unlike hybrid_deduction (two chained 2-node graphs, which collapses
-    B to a point estimate), this variant keeps B and C jointly uncertain
-    in a single chain, matching the full Bayesian posterior.
-    """
-    import numpy as np
-    if n_batches is None:
-        n_batches = DEFAULT_BINARY_N_BATCHES
-
-    graph = compile_binary_chain(
-        [s_A, 0.5, 0.5], [s_AB, s_BC], [background, background],
-        clamp_root=True, include_parent_bias=True)
-    samples = run_binary_sampling(graph, seed=seed, n_batches=n_batches)
-
-    root_bits = np.asarray(samples["root_bits"]).flatten()
-    A_pos = root_bits > 0
-    if int(A_pos.sum()) == 0:
-        s_C_inferred = float("nan")
-    else:
-        C_all = np.asarray(samples["vmap_samples"][1][:, :, 0])
-        C_sel = C_all[A_pos]
-        s_C_inferred = float((C_sel > 0).mean())
-
-    c_AC = _c_deduction(s_AB, c_AB, s_BC, c_BC)
     return s_C_inferred, c_AC
 
 

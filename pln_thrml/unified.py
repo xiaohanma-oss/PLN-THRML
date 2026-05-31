@@ -25,7 +25,6 @@ from pln_thrml.compiler_unified import (
 # Pure separation: g=1 always. No precision modulation across layers.
 _G_IDENTITY = lambda n: 1.0
 from pln_thrml.compiler_binary import (
-    compile_binary_chain_with_hidden,
     compile_binary_joint_2node,
     run_binary_sampling,
     estimate_binary_marginal,

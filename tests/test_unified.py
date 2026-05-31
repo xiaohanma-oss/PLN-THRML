@@ -22,7 +22,6 @@ from pln_thrml.unified import (
 from pln_thrml.hybrid import (
     hybrid_modus_ponens,
     hybrid_deduction,
-    hybrid_abduction,
 )
 from pln_thrml.dtv_baseline import (
     dtv_modus_ponens,
@@ -34,7 +33,6 @@ from pln_thrml.dtv_baseline import (
 from pln_thrml.qln_cpu import (
     c_modus_ponens,
     c_deduction,
-    c_abduction,
     inversion_pln,
     inversion_bayes,
     revision,

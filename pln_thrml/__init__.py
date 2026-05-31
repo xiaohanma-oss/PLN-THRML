@@ -7,11 +7,25 @@ Unified arch:  pln_thrml.unified (LBM(s) on TSU + QLN(n) on CPU)
 QLN layer:     pln_thrml.qln_cpu (closed-form confidence propagation)
 """
 
-from pln_thrml.pln_utils import *  # noqa: F401,F403
-from pln_thrml.pln_utils import __all__ as _utils_all
-from pln_thrml.unified import *  # noqa: F401,F403
-from pln_thrml.unified import __all__ as _unified_all
-from pln_thrml.qln_cpu import *  # noqa: F401,F403
-from pln_thrml.qln_cpu import __all__ as _qln_all
+from .pln_utils import (
+    EPS, DEFAULT_EPSILON, c2w, w2c, stv_to_beta_params,
+)
+from .unified import (
+    unified_modus_ponens, unified_deduction, unified_abduction,
+    unified_inversion, unified_revision,
+)
+from .qln_cpu import (
+    c_modus_ponens, c_deduction, c_abduction,
+    inversion_pln, inversion_bayes, revision,
+)
 
-__all__ = list(_utils_all) + list(_unified_all) + list(_qln_all)
+__all__ = [
+    # pln_utils
+    "EPS", "DEFAULT_EPSILON", "c2w", "w2c", "stv_to_beta_params",
+    # unified
+    "unified_modus_ponens", "unified_deduction", "unified_abduction",
+    "unified_inversion", "unified_revision",
+    # qln_cpu
+    "c_modus_ponens", "c_deduction", "c_abduction",
+    "inversion_pln", "inversion_bayes", "revision",
+]

@@ -13,7 +13,7 @@ import numpy as np
 
 from pln_thrml.compiler_binary import (
     ising_params, prior_bias,
-    compile_binary_chain, compile_binary_inv_v,
+    compile_binary_chain,
     run_binary_sampling, estimate_binary_marginal,
 )
 from pln_thrml.hybrid import (
